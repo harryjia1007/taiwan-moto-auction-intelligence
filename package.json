@@ -27,6 +27,7 @@
     "db:reset": "supabase db reset",
     "db:test": "supabase test db",
     "fixtures:media": "node scripts/cache-fixture-media.mjs",
+    "fixtures:media:test": "node scripts/create-test-fixture-media.mjs",
     "ingest": "pnpm ingest:shwoo && pnpm ingest:pcc && pnpm ingest:judicial",
     "ingest:shwoo": "docker compose run --rm ingest sync --source shwoo",
     "ingest:pcc": "docker compose run --rm ingest sync --source pcc",

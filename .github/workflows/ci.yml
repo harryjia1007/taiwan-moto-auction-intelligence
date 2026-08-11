@@ -20,6 +20,7 @@ jobs:
         env:
           TM_FIXTURE_MODE: "true"
       - run: pnpm --filter @tm-ai/web exec playwright install --with-deps chromium
+      - run: pnpm fixtures:media:test
       - run: pnpm test:e2e
         env:
           TM_FIXTURE_MODE: "true"
