@@ -19,7 +19,7 @@ jobs:
       - run: pnpm build
         env:
           TM_FIXTURE_MODE: "true"
-      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm --filter @tm-ai/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e
         env:
           TM_FIXTURE_MODE: "true"
