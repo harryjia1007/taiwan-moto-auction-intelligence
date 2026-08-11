@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(25);
+select plan(28);
 
 select has_table('public', 'raw_artifacts', 'raw artifacts exist');
 select has_table('public', 'field_evidence', 'field evidence exists');
@@ -9,6 +9,9 @@ select has_view('public', 'motorcycle_listing', 'motorcycle read model exists');
 select has_view('public', 'motorcycle_marketplace_listing', 'multi-source and bulk-lot read model exists');
 select has_function('public', 'taiwan_county_from_text', array['text'], 'county normalization is deterministic in the database');
 select is(taiwan_county_from_text('臺灣臺中地方法院'), '臺中市', 'county normalization works for court organization names');
+select is(taiwan_county_from_text('新竹縣竹北市 臺灣新竹地方法院'), '新竹縣', 'an explicit storage county wins over a court-name fallback');
+select is(taiwan_county_from_text('臺灣士林地方法院'), '臺北市', 'special court names map to their administrative area');
+select is(taiwan_county_from_text('臺灣橋頭地方法院'), '高雄市', 'cross-named courts map to their administrative area');
 select has_column('public', 'motorcycle_marketplace_listing', 'county', 'marketplace exposes normalized county');
 select has_column('public', 'motorcycle_marketplace_listing', 'display_price', 'marketplace exposes one deterministic sort price');
 select has_column('public', 'motorcycle_marketplace_listing', 'has_cached_photo', 'marketplace distinguishes cached photos from remote URLs');
