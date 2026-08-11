@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "name": "Taiwan Moto Auction Intelligence",
+    "locale": "zh-TW",
+    "direction": "premium editorial utility",
+    "version": "2026-08-11"
+  },
+  "color": {
+    "ink": "#14211C",
+    "inkSoft": "#33423A",
+    "muted": "#68746D",
+    "paper": "#EFEEE9",
+    "surface": "#FBFBF8",
+    "surfaceStrong": "#FFFFFF",
+    "line": "#D7DBD4",
+    "lineStrong": "#BFC7C0",
+    "brand": "#115A43",
+    "brandDark": "#0B3F31",
+    "brandSoft": "#E1EEE8",
+    "warning": "#9A5A1E",
+    "warningSoft": "#F8ECDC",
+    "danger": "#9A3832",
+    "dangerSoft": "#F7E5E2",
+    "evidence": "#315F78",
+    "evidenceSoft": "#E3EDF2"
+  },
+  "type": {
+    "ui": "Noto Sans TC, PingFang TC, Microsoft JhengHei, system-ui, sans-serif",
+    "display": "Georgia, Noto Serif TC, serif",
+    "minimumBodyPx": 14,
+    "minimumMetadataPx": 11,
+    "numericStyle": "tabular when aligned in tables or price history"
+  },
+  "shape": {
+    "controlRadiusPx": 5,
+    "cardRadiusPx": 0,
+    "badgeRadiusPx": 4,
+    "favoriteRadius": "50%"
+  },
+  "space": {
+    "basePx": 4,
+    "cardPaddingDesktopPx": 18,
+    "cardPaddingMobilePx": 16,
+    "sectionGapDesktopPx": 22,
+    "sectionGapMobilePx": 16
+  },
+  "breakpoint": {
+    "mobileMaxPx": 640,
+    "tabletMaxPx": 980,
+    "wideMinPx": 1180
+  }
+}

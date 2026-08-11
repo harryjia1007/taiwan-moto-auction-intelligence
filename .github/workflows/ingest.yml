@@ -1,0 +1,40 @@
+name: Scheduled official-source ingestion
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4,10,16,22 * * *"
+
+concurrency:
+  group: official-source-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [shwoo, pcc, judicial]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r services/ingest/requirements.lock
+      - run: pip install --no-deps services/ingest
+      - name: Check public source
+        run: python -m ingest healthcheck --source ${{ matrix.source }}
+      - name: Synchronize official listings
+        run: python -m ingest sync --source ${{ matrix.source }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RAW_ARTIFACT_BUCKET: raw-artifacts
+          SHWOO_REQUEST_INTERVAL_SECONDS: "1"
+          PCC_REQUEST_INTERVAL_SECONDS: "1"

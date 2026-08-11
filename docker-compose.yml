@@ -1,0 +1,23 @@
+services:
+  ingest:
+    build:
+      context: ./services/ingest
+      target: runtime
+    env_file:
+      - path: ./services/ingest/.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:54322/postgres}
+      SUPABASE_URL: ${SUPABASE_URL:-http://host.docker.internal:54321}
+      RAW_ARTIFACT_BUCKET: ${RAW_ARTIFACT_BUCKET:-raw-artifacts}
+    volumes:
+      - ./services/ingest:/app
+      - ./.data:/data
+    command: ["--help"]
+
+  ingest-test:
+    build:
+      context: ./services/ingest
+      target: test
+    volumes:
+      - ./services/ingest:/app

@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a scoped improvement that preserves provenance and source safety.
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who has the problem, and what can they not do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the smallest useful outcome, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: integrity
+    attributes:
+      label: Data-integrity or access considerations
+      description: Note effects on provenance, identity resolution, source load, privacy, or authentication.

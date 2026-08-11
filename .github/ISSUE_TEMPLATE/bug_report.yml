@@ -1,0 +1,32 @@
+name: Bug report
+description: Report reproducible behavior in the application, pipeline, or documentation.
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, unsanitized official artifacts, or sensitive personal data.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide minimal steps, source status, and fixture name where applicable.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Version or commit
+      placeholder: Commit SHA or release tag
+  - type: textarea
+    id: checks
+    attributes:
+      label: Verification already attempted
+      description: List commands, logs, or screenshots with sensitive values removed.

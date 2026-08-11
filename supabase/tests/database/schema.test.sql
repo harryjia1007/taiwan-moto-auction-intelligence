@@ -1,0 +1,32 @@
+begin;
+create extension if not exists pgtap;
+select plan(25);
+
+select has_table('public', 'raw_artifacts', 'raw artifacts exist');
+select has_table('public', 'field_evidence', 'field evidence exists');
+select has_table('public', 'probable_duplicates', 'probable duplicates exist');
+select has_view('public', 'motorcycle_listing', 'motorcycle read model exists');
+select has_view('public', 'motorcycle_marketplace_listing', 'multi-source and bulk-lot read model exists');
+select has_function('public', 'taiwan_county_from_text', array['text'], 'county normalization is deterministic in the database');
+select is(taiwan_county_from_text('臺灣臺中地方法院'), '臺中市', 'county normalization works for court organization names');
+select has_column('public', 'motorcycle_marketplace_listing', 'county', 'marketplace exposes normalized county');
+select has_column('public', 'motorcycle_marketplace_listing', 'display_price', 'marketplace exposes one deterministic sort price');
+select has_column('public', 'motorcycle_marketplace_listing', 'has_cached_photo', 'marketplace distinguishes cached photos from remote URLs');
+select has_column('public', 'motorcycle_marketplace_listing', 'search_text', 'marketplace exposes normalized multi-field search text');
+select has_view('public', 'resolved_field_evidence', 'explicit evidence precedence view exists');
+select has_index('public', 'source_records', 'source_records_search_vector_idx', 'normalized full-text index exists');
+select has_index('public', 'documents', 'documents_source_artifact_uidx', 'official documents are idempotent per source artifact');
+select has_index('public', 'auction_events', 'auction_events_marketplace_deadline_idx', 'deadline pagination has a stable database index');
+select ok(exists(select 1 from pg_constraint where conname = 'photos_exactly_one_owner_chk'), 'photos belong to exactly one listing entity');
+select ok(exists(select 1 from pg_constraint where conname = 'photos_nonnegative_sort_order_chk'), 'photo order cannot be negative');
+select col_type_is('public', 'vehicles', 'can_start', 'four_state', 'four-state facts are typed');
+select col_type_is('public', 'vehicles', 'registration_status', 'registration_status', 'registration status is typed');
+select is((select count(*) from sources where status = 'ACTIVE'), 0::bigint, 'no source claims active coverage before a live sync');
+select is((select count(*) from motorcycle_listing), 1::bigint, 'seed exposes one sanitized real listing');
+select is((select can_start::text from vehicles limit 1), 'NO', 'explicit unable-to-start fact is negative');
+select is((select has_key::text from vehicles limit 1), 'UNKNOWN', 'missing key fact remains unknown');
+select is((select count(*) from field_evidence where trust = 'OFFICIAL_EXPLICIT'), 3::bigint, 'important seed facts retain evidence');
+select is((select count(*) from organizations where organization_type = 'DISTRICT_COURT'), 22::bigint, 'all district courts are seeded');
+
+select * from finish();
+rollback;

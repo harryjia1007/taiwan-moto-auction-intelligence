@@ -1,0 +1,49 @@
+name: Official data source proposal
+description: Propose or document a public official auction source.
+title: "[Source]: "
+labels: [data-source, research, needs-triage]
+body:
+  - type: input
+    id: agency
+    attributes:
+      label: Agency and source family
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Official public URL
+      placeholder: https://...
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: Access constraints observed
+      options:
+        - Public and readable without login or CAPTCHA
+        - Login required
+        - CAPTCHA or anti-bot control present
+        - Payment or explicit confirmation required
+        - Unknown; research only
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: Public-interest value and coverage
+      description: Explain what the source adds and whether it duplicates another channel.
+    validations:
+      required: true
+  - type: textarea
+    id: format
+    attributes:
+      label: Formats and update behavior
+      description: Note search pages, detail pages, PDFs, images, identifiers, and apparent update cadence.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety acknowledgement
+      options:
+        - label: I am not asking the project to bypass access controls or automate a paid action.
+          required: true

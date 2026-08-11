@@ -1,0 +1,5 @@
+{
+  "buildCommand": "pnpm --filter @tm-ai/web build",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "framework": "nextjs"
+}
