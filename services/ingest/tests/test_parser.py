@@ -146,6 +146,30 @@ def test_judicial_manual_manifest_preserves_time_location_and_four_state_facts()
     assert record.can_test == FourState.NO
 
 
+def test_judicial_does_not_invent_round_and_preserves_explicit_fees() -> None:
+    row = {
+        "crtnm": "臺灣高雄地方法院", "crm": "114司執字第062646號",
+        "saledate": "1150702", "saleno": "UNKNOWN", "ttitle": "電動機車",
+        "registeno": "車牌：ERC-1738", "qty": "1", "unit": "輛",
+        "notes": "鑰匙未交付；內含電池非債務人所有，不在拍賣範圍。",
+        "deposit": 10000, "fee_notes": ["保證金新臺幣10,000元"],
+    }
+    item = DiscoveredItem(
+        source_record_id="manual-ksd-fees", official_url="https://aomp109.judicial.gov.tw/example.pdf",
+        title=row["ttitle"], discovery_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm",
+    )
+    content = json.dumps(row, ensure_ascii=False).encode()
+    artifact = RawArtifact(
+        official_url=item.official_url, fetched_at=datetime.fromisoformat("2026-08-09T00:00:00+00:00"),
+        content=content, mime_type="application/json", filename="manual.json", checksum_sha256=sha256(content).hexdigest(),
+    )
+    record = parse_judicial_record(item, artifact)
+    assert record.auction_round is None
+    assert record.has_key == FourState.NO
+    assert record.deposit == 10000
+    assert record.fee_notes == ["保證金新臺幣10,000元"]
+
+
 def test_judicial_separable_multi_motorcycle_lot_preserves_each_plate() -> None:
     row = {
         "saledate": "1150806", "saleno": "1", "ttitle": "大型重機（775-FBL）、大型重機（AV-681）",

@@ -476,7 +476,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     color = _label_value(notes, ("顏色", "車色"))
     mileage = integer(_label_value(notes, ("里程數", "里程")))
     location = clean(str(row.get("location") or "")) or _label_value(notes, ("物品所在地", "拍賣地點"))
-    has_key = FourState.NO if re.search(r"(?:無|沒有)\s*(?:機車)?鑰匙", notes) else FourState.YES if re.search(r"(?:有|附)\s*(?:機車)?鑰匙", notes) else FourState.UNKNOWN
+    has_key = FourState.NO if re.search(r"(?:無|沒有)\s*(?:機車)?鑰匙|(?:機車)?鑰匙(?:未交付|未扣得)", notes) else FourState.YES if re.search(r"(?:有|附)\s*(?:機車)?鑰匙", notes) else FourState.UNKNOWN
     can_start = FourState.NO if re.search(r"(?:無法|不能)(?:發動|啟動)|發不動", notes) else FourState.YES if re.search(r"(?:可|能)(?:發動|啟動)", notes) else FourState.UNKNOWN
     can_test = FourState.NO if re.search(r"(?:無法|不能|不得)測試", notes) else FourState.YES if re.search(r"(?:可|能)測試", notes) else FourState.UNKNOWN
     engine = _label_value(notes, ("引擎號碼", "引擎號", "引擎"))
@@ -507,6 +507,14 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
 
     reserve_raw = integer(str(row.get("sumprice") or ""))
     reserve_price = reserve_raw if reserve_raw and reserve_raw > 0 else None
+    deposit = integer(str(row.get("deposit") or ""))
+    raw_fee_notes = row.get("fee_notes")
+    if isinstance(raw_fee_notes, list):
+        fee_notes = [clean(str(value)) for value in raw_fee_notes if clean(str(value))]
+    elif raw_fee_notes:
+        fee_notes = [clean(str(raw_fee_notes))]
+    else:
+        fee_notes = []
     official_url = str(item.official_url)
     evidence: list[EvidenceRef] = []
     for field_name, normalized, source_value, key in [
@@ -516,6 +524,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         ("auction_round", auction_round, row.get("saleno"), "saleno"),
         ("lot_size", quantity, row.get("qty"), "qty"),
         ("reserve_price", reserve_price, row.get("sumprice"), "sumprice"),
+        ("deposit", deposit, row.get("deposit"), "deposit"),
         ("title", title, row.get("ttitle"), "ttitle"),
     ]:
         if source_value not in (None, ""):
@@ -541,7 +550,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         "auction": [organization, sale_date, auction_round, reserve_price, status],
         "condition": [has_key, can_start, can_test, notes],
         "registration": [RegistrationStatus.UNKNOWN, plate, FourState.UNKNOWN],
-        "fees": [None, None, None],
+        "fees": [deposit, fee_notes, None],
         "media": [integer(str(item.metadata.get("pic_cnt") or "")) or None],
     })
     bulk_lot = quantity > 1
@@ -556,6 +565,8 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         auction_round=auction_round,
         ends_at=sale_date,
         reserve_price=reserve_price,
+        deposit=deposit,
+        fee_notes=fee_notes,
         title=title,
         lot_size=quantity,
         bulk_lot=bulk_lot,

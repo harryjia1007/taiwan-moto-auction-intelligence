@@ -12,7 +12,9 @@
 python -m ingest sync --source judicial --manifest ./private/judicial-official-links.json
 ```
 
-Manifest 每列必須使用 `https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm?filenm=...pdf`，並包含 `crtnm`、`crm`、`saledate`、`saleno`、`ttitle` 等人工核對過的官方欄位。正式 manifest 含真實案件資料，不得提交到公開 Git repository。
+Manifest 每列必須使用 `https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm?filenm=...pdf`，並包含 `crtnm`、`crm`、`saledate`、`ttitle` 等人工核對過的官方欄位。只有官方公告明確寫出拍次時才填 `saleno`；否則填 `UNKNOWN`，不得從第三方網站推定。正式 manifest 含真實案件資料，不得提交到公開 Git repository。
+
+截至 2026-08-15，公開層使用的人工核對清冊包含 14 份司法院官方公告，其中 4 件拍賣日期尚未到、10 件已截止。第三方網站可以用來發現可能漏件，但不能作為成交、成交價、拍次或車況的證據；本批公告若官方文件沒有成交結果，就只標示「已截止／結果待官方確認」。公開頁只保存結構化欄位與官方網址，完整 PDF 由使用者直接開啟司法院原站，不在本站建立公開鏡像。
 
 人工清單亦可保存從同一份官方公告逐字核對的 `sale_time`、`location` 與車輛備註。解析器會保留拍賣時間（不只日期）、所在地、里程及鑰匙／發動／測試的四態語意；例如「無法測試」仍不會被推成「無法發動」。公開投影不包含債權人、債務人、引擎號碼或 PDF 全文。
 
