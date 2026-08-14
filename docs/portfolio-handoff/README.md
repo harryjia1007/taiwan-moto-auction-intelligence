@@ -1,34 +1,25 @@
 # 臺灣機車拍賣情報 — Portfolio Handoff
 
-建議整合路徑：`harryjia.com/projects/taiwan-moto-auction`
+正式網址：`https://harryjia.com/projects/taiwan-moto-auction/`
 
-這個交付包只描述公開的合成資料互動展示。正式案件、登入、收藏、來源健康、官方文件、照片、證據及資料庫全部留在私人系統，不是作品集部署範圍。
+公開頁是精簡的正式案件查詢工具，從 Supabase 唯讀公開 view 取得經整理的案件資料，提供進行中、30 天內、已結束、關鍵字、法定級別、排氣量及照片篩選。每筆案件顯示官方已提供的車牌、案號、價格、日期、機關、地點、資格、領牌狀態、車況及照片，並連回官方公告。
 
-## 可移植範圍
+## 公開邊界
 
-- `apps/web/app/demo/page.tsx`：公開作品頁與篩選介面
-- `apps/web/lib/demo-data.ts`：完全合成資料與純函式篩選
-- `apps/web/app/legal/*`：隱私、資料使用、免責與更正頁
-- `apps/web/app/globals.css` 中 `.demo-*` 與 `.legal-*` 樣式
-- `design-tokens.json`：顏色、字體、圓角與間距
+- 公開：正規化案件欄位、官方公告連結、允許公開載入的官方照片。
+- 不公開：Supabase service-role key、原始 artifacts、私人 Storage、完整證據庫、收藏、來源維運資料及 owner 帳號。
+- 不保存或公開複製法院 PDF；網站只連回官方 PDF。
+- 未取得的欄位顯示「官方未提供」或「未確認」，不得推測補值。
 
-公開頁不得匯入 `apps/web/lib/fixtures.ts`、Supabase client、私人 API 或任何官方附件。若整合環境沒有本專案的 shared package，需把 MotorcycleClass 與 DisplacementBand 型別及排氣量比對函式一併複製成局部純函式。
+## 目前介面
 
-## 專案故事
-
-臺灣機車拍賣資訊散落在多個政府入口、公告與附件中。此專案的重點不是做另一個列表，而是把「誰能投標、能否領牌、車況是否真的有證據、期限是否仍有效」放在使用者決策之前。資料管線採證據優先、未知不等於否定、來源不允許自動存取就停止的設計。
-
-## 技術架構
-
-公開層是無資料庫、無 Cookie、無追蹤碼的 Next.js 合成 Demo。私人層使用 owner-only Supabase Auth、PostgreSQL RLS、私有 Storage、checksum 原始檔、歷史 snapshots 與非同步 Python adapters。公開與私人層沒有資料依賴。
+主頁只保留頁名、同步時間、案件狀態、搜尋篩選、目前條件、完整案件卡片、來源摘要與必要免責。流程宣言、廣告預留及重複說明不放在找車流程中；完整政策集中於 `legal.html`。
 
 ## 上架狀態
 
-公開合成資料作品頁已於 2026 年 8 月 15 日由專案負責人明確授權發布：
-
-- 正式網址：`https://harryjia.com/projects/taiwan-moto-auction`
+- 狀態：`PUBLIC_LIVE_MARKETPLACE`
 - 個人網站 repo：`harryjia1007/harry-world`
-- Git commit：`4fe3afd`
-- Cloudflare Worker version：`f5622619-41b3-4db8-8769-b29e9a5183c6`
+- Git commit：`96c79cb`
+- Cloudflare Worker version：`aa3b6a80-ad3c-4ff2-8596-fc94e159cb84`
 
-狀態為 `PUBLIC_DEMO_PUBLISHED`。私人真實資料系統仍是 `NO_GO`，因 Supabase migration／seed／pgTAP 尚未在可用的容器環境完成，且公開真實案件仍明確排除。未來改版須繼續遵守本資料夾的公開資料邊界。
+公開頁已上線；私人 ingestion 的 service-role 排程、完整資料庫驗證與未授權來源仍須各自通過發布閘門，不得因公開頁上線而視為全部來源已自動化。
