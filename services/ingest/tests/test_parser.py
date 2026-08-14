@@ -120,6 +120,32 @@ def test_judicial_unlabelled_brand_and_compact_manufacture_date() -> None:
     assert next(identifier for identifier in record.identifiers if identifier.identifier_type == "PLATE").original_value == "721-GWL"
 
 
+def test_judicial_manual_manifest_preserves_time_location_and_four_state_facts() -> None:
+    row = {
+        "saledate": "1150821", "sale_time": "115年8月21日上午10時整", "saleno": "1",
+        "ttitle": "山葉機車", "registeno": "車牌號碼：511-KND", "qty": "1",
+        "notes": "車牌號碼：511-KND；廠牌：山葉；無機車鑰匙，無法測試。",
+        "location": "新北市新店區北宜路2段117-2號1樓", "sumprice": 0,
+        "crtnm": "臺灣臺北地方法院", "crm": "114司執字第201863號", "pic_cnt": 0,
+    }
+    content = json.dumps(row, ensure_ascii=False).encode()
+    judicial_item = DiscoveredItem(
+        source_record_id="manual-tpd-1",
+        official_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm?filenm=x.pdf",
+        title=row["ttitle"], discovery_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm",
+    )
+    source = RawArtifact(
+        official_url=judicial_item.official_url, fetched_at=datetime.fromisoformat("2026-08-09T00:00:00+00:00"),
+        mime_type="application/json", content=content, checksum_sha256=sha256(content).hexdigest(),
+    )
+    record = parse_judicial_record(judicial_item, source)
+    assert record.ends_at and record.ends_at.isoformat() == "2026-08-21T10:00:00+08:00"
+    assert record.location == "新北市新店區北宜路2段117-2號1樓"
+    assert record.has_key == FourState.NO
+    assert record.can_start == FourState.UNKNOWN  # inability to test is not inability to start
+    assert record.can_test == FourState.NO
+
+
 def test_single_motorcycle_preserves_unknown_semantics() -> None:
     record = parse_shwoo_detail(item(), artifact("shwoo_single.html"))
     assert record.official_case_number == "115Y431240018"

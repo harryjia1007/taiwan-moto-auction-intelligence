@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ingest.models import ParsedAuctionRecord
 
 
-def public_listing_payload(record: ParsedAuctionRecord, *, synced_at: datetime | None = None) -> dict[str, Any]:
+def public_listing_payload(
+    record: ParsedAuctionRecord,
+    *,
+    source_adapter: str = "shwoo",
+    source_name: str = "臺北惜物網",
+    synced_at: datetime | None = None,
+) -> dict[str, Any]:
     """Build the intentionally narrow public projection from an official record.
 
     Engine, frame and VIN identifiers, evidence text, raw artifacts and people are
@@ -23,7 +30,11 @@ def public_listing_payload(record: ParsedAuctionRecord, *, synced_at: datetime |
     for unit in record.vehicle_units:
         plates.extend(entry.original_value for entry in unit.identifiers if entry.identifier_type == "PLATE")
     plates = list(dict.fromkeys(plates))
-    mixed_vehicle_lot = "汽車" in f"{record.official_title} {record.description or ''}" and "機車" in f"{record.official_title} {record.description or ''}"
+    vehicle_text = f"{record.official_title} {record.description or ''}"
+    # Legal boilerplate frequently says 「汽車燃料使用費」 even for a single
+    # motorcycle. Only explicit non-motorcycle vehicle nouns make this mixed.
+    explicit_car = re.search(r"(?:自用|營業)?(?:小客|大客|小貨|大貨|客貨兩用)車|汽車\s*\d+\s*[輛台部]", vehicle_text)
+    mixed_vehicle_lot = bool(explicit_car and "機車" in vehicle_text)
     state_labels = {
         "YES": "是", "NO": "否", "UNKNOWN": "未確認", "CONFLICTING": "資訊衝突",
     }
@@ -34,9 +45,9 @@ def public_listing_payload(record: ParsedAuctionRecord, *, synced_at: datetime |
     ])
 
     payload: dict[str, Any] = {
-        "id": f"shwoo-{record.source_record_id}",
-        "source_adapter": "shwoo",
-        "source_name": "臺北惜物網",
+        "id": f"{source_adapter}-{record.source_record_id}",
+        "source_adapter": source_adapter,
+        "source_name": source_name,
         "source_record_id": record.source_record_id,
         "official_url": str(record.official_url),
         "official_title": record.official_title,

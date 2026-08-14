@@ -446,7 +446,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     title = clean(str(row.get("ttitle") or item.title))
     notes = clean(str(row.get("notes") or ""))
     organization = clean(str(row.get("crtnm") or "未辨識法院"))
-    sale_date = roc_compact_date(str(row.get("saledate") or ""))
+    sale_date = official_datetime(str(row.get("sale_time") or "")) or roc_compact_date(str(row.get("saledate") or ""))
     status = AuctionStatus.EXPIRED if sale_date and sale_date.date() < datetime.now(TAIPEI).date() else AuctionStatus.SCHEDULED
     auction_round = integer(str(row.get("saleno") or ""))
     quantity = integer(str(row.get("qty") or "")) or 1
@@ -471,6 +471,11 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     displacement_text = _label_value(notes, ("排氣量(馬力)", "排氣量（馬力）", "排氣量", "汽缸容量"))
     displacement = integer(displacement_text)
     color = _label_value(notes, ("顏色", "車色"))
+    mileage = integer(_label_value(notes, ("里程數", "里程")))
+    location = clean(str(row.get("location") or "")) or _label_value(notes, ("物品所在地", "拍賣地點"))
+    has_key = FourState.NO if re.search(r"(?:無|沒有)\s*(?:機車)?鑰匙", notes) else FourState.YES if re.search(r"(?:有|附)\s*(?:機車)?鑰匙", notes) else FourState.UNKNOWN
+    can_start = FourState.NO if re.search(r"(?:無法|不能)發動|發不動", notes) else FourState.YES if re.search(r"(?:可|能)發動", notes) else FourState.UNKNOWN
+    can_test = FourState.NO if re.search(r"(?:無法|不能|不得)測試", notes) else FourState.YES if re.search(r"(?:可|能)測試", notes) else FourState.UNKNOWN
     engine = _label_value(notes, ("引擎號碼", "引擎號", "引擎"))
     frame = _label_value(notes, ("車身號碼", "車架號碼", "車台號碼"))
     manufacture = _label_value(notes, ("出廠年月", "製造年月"))
@@ -510,7 +515,11 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     for field_name, normalized, source_value in [
         ("plate", plate, plate), ("brand", brand, brand_raw), ("model", model, model),
         ("manufacture_year", manufacture_year, manufacture), ("displacement_cc", displacement, displacement_text),
-        ("color", color, color), ("engine", engine, engine), ("frame", frame, frame),
+        ("color", color, color), ("mileage_km", mileage, mileage), ("location", location, location),
+        ("has_key", has_key.value, _explicit_fact_sentence(notes, r"鑰匙")),
+        ("can_start", can_start.value, _explicit_fact_sentence(notes, r"發動")),
+        ("can_test", can_test.value, _explicit_fact_sentence(notes, r"測試")),
+        ("engine", engine, engine), ("frame", frame, frame),
     ]:
         if source_value:
             evidence.append(_structured_evidence(field_name, normalized, source_value, "notes"))
@@ -520,7 +529,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     completeness, groups = _completeness_groups({
         "identity": [plate, brand, model, case_number],
         "auction": [organization, sale_date, auction_round, reserve_price, status],
-        "condition": [FourState.UNKNOWN, FourState.UNKNOWN, FourState.UNKNOWN, notes],
+        "condition": [has_key, can_start, can_test, notes],
         "registration": [RegistrationStatus.UNKNOWN, plate, FourState.UNKNOWN],
         "fees": [None, None, None],
         "media": [integer(str(item.metadata.get("pic_cnt") or "")) or None],
@@ -549,6 +558,11 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         displacement_cc=displacement,
         vehicle_class=vehicle_class,
         color=color,
+        mileage_km=mileage,
+        location=location,
+        has_key=has_key,
+        can_start=can_start,
+        can_test=can_test,
         registration_status=RegistrationStatus.UNKNOWN,
         condition_summary=notes or None,
         identifiers=identifiers,

@@ -51,3 +51,24 @@ def test_public_feed_does_not_copy_description_or_mixed_car_specs():
     assert payload["brand_name"] is None
     assert payload["displacement_cc"] is None
     assert "02-12345678" not in str(payload)
+
+
+def test_public_feed_supports_a_human_reviewed_official_source():
+    item = record(source_record_id="court-1", official_url="https://aomp109.judicial.gov.tw/example")
+    payload = public_listing_payload(item, source_adapter="judicial", source_name="司法院動產拍賣")
+    assert payload["id"] == "judicial-court-1"
+    assert payload["source_adapter"] == "judicial"
+    assert payload["source_name"] == "司法院動產拍賣"
+
+
+def test_motorcycle_fee_boilerplate_does_not_create_a_mixed_vehicle_lot():
+    item = record(
+        official_title="普通重型機車",
+        description="拍定人應繳清汽車燃料使用費後辦理過戶",
+        displacement_cc=158,
+        brand="SYM",
+    )
+    payload = public_listing_payload(item, source_adapter="judicial", source_name="司法院動產拍賣")
+    assert payload["bulk_lot"] is False
+    assert payload["brand_name"] == "SYM"
+    assert payload["displacement_cc"] == 158

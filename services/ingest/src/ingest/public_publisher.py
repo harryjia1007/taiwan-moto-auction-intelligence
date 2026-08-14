@@ -21,7 +21,15 @@ class SupabasePublicPublisher:
     not need a direct PostgreSQL password. The service key stays server-only.
     """
 
-    def __init__(self, url: str, service_role_key: str, bucket: str = "raw-artifacts") -> None:
+    def __init__(
+        self,
+        url: str,
+        service_role_key: str,
+        bucket: str = "raw-artifacts",
+        *,
+        source_adapter: str = "shwoo",
+        source_name: str = "臺北惜物網",
+    ) -> None:
         self.url = url.rstrip("/")
         self.headers = {
             "apikey": service_role_key,
@@ -30,6 +38,8 @@ class SupabasePublicPublisher:
         }
         self.client = httpx.AsyncClient(base_url=self.url, headers=self.headers, timeout=30)
         self.storage = SupabaseArtifactStorage(self.url, service_role_key, bucket)
+        self.source_adapter = source_adapter
+        self.source_name = source_name
         self.source_id: str | None = None
         self.run_id: str | None = None
 
@@ -45,9 +55,9 @@ class SupabasePublicPublisher:
         return response.json()
 
     async def start(self) -> str:
-        sources = await self._json("GET", "/rest/v1/sources?adapter_name=eq.shwoo&select=id&limit=1")
+        sources = await self._json("GET", f"/rest/v1/sources?adapter_name=eq.{self.source_adapter}&select=id&limit=1")
         if not sources:
-            raise RuntimeError("Production source registry has no shwoo source")
+            raise RuntimeError(f"Production source registry has no {self.source_adapter} source")
         self.source_id = sources[0]["id"]
         runs = await self._json(
             "POST", "/rest/v1/sync_runs",
@@ -108,7 +118,11 @@ class SupabasePublicPublisher:
         await self._json(
             "POST", "/rest/v1/public_live_motorcycle_listings?on_conflict=id",
             headers={**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
-            json=public_listing_payload(record),
+            json=public_listing_payload(
+                record,
+                source_adapter=self.source_adapter,
+                source_name=self.source_name,
+            ),
         )
         return True
 
