@@ -11,7 +11,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const viewer = await requireViewer();
   const { id } = await params;
   if (!viewer.fixture || process.env.TM_FIXTURE_MODE !== "true" || !allowed.has(id)) return new NextResponse("Not found", { status: 404 });
-  for (const [extension, contentType] of [["png", "image/png"], ["jpg", "image/jpeg"], ["webp", "image/webp"], ["svg", "image/svg+xml"]] as const) {
+  for (const [extension, contentType] of [["svg", "image/svg+xml"], ["png", "image/png"], ["jpg", "image/jpeg"], ["webp", "image/webp"]] as const) {
     try {
       const bytes = await readFile(path.join(process.cwd(), ".data", "fixture-media", `${id}.${extension}`));
       return new NextResponse(bytes, { headers: { "content-type": contentType, "cache-control": "private, max-age=3600" } });

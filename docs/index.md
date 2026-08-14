@@ -13,6 +13,8 @@
 - [Taipei Shwoo adapter](ingestion/shwoo.md)
 - [Government e-Procurement adapter](ingestion/pcc.md)
 - [Judicial Yuan 22-court adapter](ingestion/judicial.md)
+- [MOJ centralized seized-property adapter](ingestion/moj-auction.md)
+- [Administrative Enforcement manual discovery adapter](ingestion/moj-enforcement.md)
 - [Paid vehicle-registry enrichment](ingestion/mvdvan.md)
 - [Other source families](ingestion/source-families.md)
 - [Deployment configuration](deployment.md)

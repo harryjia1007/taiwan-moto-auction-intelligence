@@ -1,6 +1,6 @@
 import type {
-  AdapterStatus, AuctionStatus, BidEligibility, DisposalOrigin,
-  FourState, RegistrationStatus, SourceTrust,
+  AdapterStatus, AuctionStatus, BidEligibility, DisposalOrigin, DisplacementBand,
+  FourState, MotorcycleClass, RegistrationStatus, SourceTrust,
 } from "./enums";
 
 export interface Evidence {
@@ -54,6 +54,7 @@ export interface Motorcycle {
   manufactureYear: number | null;
   manufactureMonth: number | null;
   displacementCc: number | null;
+  vehicleClass: MotorcycleClass;
   plateNumber: string | null;
   color: string | null;
   organization: string;
@@ -115,12 +116,14 @@ export interface MotorcycleFilters {
   brand?: string;
   eligibility?: BidEligibility;
   registration?: RegistrationStatus;
+  vehicleClass?: MotorcycleClass;
+  displacementBands?: DisplacementBand[];
   hasPhotos?: boolean;
   singleVehicle?: boolean;
   excludeScrap?: boolean;
   auctionWithinDays?: number;
   minPrice?: number;
   maxPrice?: number;
-  marketView?: "active" | "ended" | "favorites" | "all";
+  marketView?: "active" | "ended" | "favorites" | "scrap" | "all";
   sort?: "auction_asc" | "auction_desc" | "price_asc" | "price_desc" | "completeness_desc";
 }

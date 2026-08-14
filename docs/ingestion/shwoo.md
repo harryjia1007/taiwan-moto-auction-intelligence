@@ -13,7 +13,10 @@ Commands:
 ```bash
 python -m ingest healthcheck --source shwoo
 python -m ingest sync --source shwoo
+python -m ingest publish-public-shwoo
 python -m ingest reprocess --source shwoo --from-parser-version 1.0.0
 ```
 
 `reprocess` reads checksum-addressed private artifacts and never performs a live source request. A zero-result or failed live run preserves all prior records and is surfaced through source health warnings.
+
+`publish-public-shwoo` is the hosted scheduler path. It uses server-only Supabase credentials, writes official HTML/images to the private checksum-addressed bucket, retains private normalized snapshots, and updates only the sanitized `public_live_motorcycle_listings` projection. The public projection includes recent official plates for 30 days after auction end, but excludes people, phone numbers, engine/frame/VIN identifiers, evidence text, cached artifact paths, and service credentials. Mixed car/motorcycle lots remain bulk listings and do not inherit a car's displacement or brand as the motorcycle specification.

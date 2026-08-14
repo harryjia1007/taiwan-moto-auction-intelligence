@@ -8,7 +8,7 @@
 
 The project turns fragmented Taiwanese public-sector motorcycle-auction notices into a searchable, evidence-preserving dataset. It is designed for buyers, civic technologists, journalists, and researchers who need to trace every normalized fact back to an official source.
 
-> **Project status:** pre-1.0 and seeking early contributors. Three public read-only adapters are implemented, but source coverage remains `PARTIAL` until database-backed live runs are completed. The project never claims planned coverage as active coverage.
+> **Project status:** private pre-1.0 system with a separate synthetic public Demo. Only Shwoo and the MOJ centralized portal are eligible for unattended schedules; Judicial records require a human-reviewed official PDF manifest and Government e-Procurement is paused for authorization review. Code presence never implies authorized or active coverage.
 
 ## Why this exists
 
@@ -28,11 +28,13 @@ This project provides:
 
 | Source family | Implemented capability | Current status |
 |---|---|---|
-| [Judicial Yuan movable-property auctions](docs/ingestion/judicial.md) | Central search across all 22 district courts; structured rows and official PDF preservation | `PARTIAL` |
-| [Government e-Procurement asset sales](docs/ingestion/pcc.md) | Nationwide public asset-sale discovery and detail collection | `PARTIAL` |
+| [Judicial Yuan movable-property auctions](docs/ingestion/judicial.md) | Human-reviewed official PDF links and structured fields can be imported without querying or mirroring the blocked central site | `PARTIAL / MANUAL_ONLY` |
+| [Government e-Procurement asset sales](docs/ingestion/pcc.md) | Adapter retained but unattended access is paused pending written confirmation | `DEGRADED` |
 | [Taipei Shwoo](docs/ingestion/shwoo.md) | Search, detail, auction-round, evidence, and photo-preserving ingestion | `PARTIAL` |
+| [MOJ seized-property auctions](docs/ingestion/moj-auction.md) | Central vehicle-category discovery, announcement, attachment, and image preservation | `PARTIAL` |
+| [Administrative Enforcement](docs/ingestion/moj-enforcement.md) | Human CAPTCHA search followed by validated detail, document, and photo ingestion | `PARTIAL` |
 
-Administrative enforcement, prosecutors, Customs, and direct police/traffic sources are tracked as `PLANNED`. See the [source registry](docs/data/source-registry.md) for the exact distinction between implemented code and verified live coverage.
+Customs and direct police/traffic sources remain `PLANNED`. Administrative Enforcement is not scheduled because discovery requires a human-completed CAPTCHA. See the [source registry](docs/data/source-registry.md) for the exact distinction between implemented code and verified live coverage.
 
 ## Architecture
 
@@ -59,6 +61,8 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for trust boundaries and [docs/data/evid
 - Docker Desktop
 - Supabase CLI (installed by `pnpm install`)
 
+Run `pnpm run doctor` before bootstrapping. It checks Node, the project-scoped Supabase CLI, a running Docker-compatible container runtime, configuration, and the committed pgTAP suite. A missing runtime affects the real local Supabase stack; the fixture dashboard and deterministic parser/UI tests can still run. The explicit `run` is required because pnpm also has an unrelated built-in command named `doctor`.
+
 ### Run the fixture dashboard
 
 ```bash
@@ -68,17 +72,16 @@ cp .env.example services/ingest/.env
 node scripts/local-web-server.mjs start
 ```
 
-Open `http://127.0.0.1:3000`. Fixture mode uses sanitized official examples and does not imply that a nationwide production sync has completed.
+Open `http://127.0.0.1:3000`. The owner dashboard fixture mode is private development data and does not imply that a nationwide production sync has completed. The public portfolio-safe surface is `http://127.0.0.1:3000/demo` and uses only synthetic cases.
 
 ### Run the local stack
 
 ```bash
-pnpm db:start
-pnpm db:reset
+pnpm db:verify
 pnpm dev
 ```
 
-Local email links are visible in Supabase Mailpit. Production builds reject fixture-mode authentication bypasses.
+`db:verify` starts Supabase, rebuilds the database from committed migrations and seed data, and executes pgTAP. Local email links are visible in Supabase Mailpit. Production builds reject fixture-mode authentication bypasses.
 
 ### Verify a change
 
@@ -90,7 +93,7 @@ pnpm test:e2e
 python -m pytest services/ingest/tests
 ```
 
-The complete verification matrix also includes Supabase database tests in CI.
+The complete verification matrix also includes Supabase database tests in CI. The committed `database-tests.yml` workflow runs migrations, seed, and pgTAP in an isolated Linux environment with Docker, so database behavior is still verified when a developer's Mac lacks a compatible runtime.
 
 ## Run read-only ingestion
 
@@ -101,7 +104,13 @@ pnpm ingest:health
 pnpm ingest
 ```
 
-Run a single source with `pnpm ingest:shwoo`, `pnpm ingest:pcc`, or `pnpm ingest:judicial`. Reprocess stored artifacts without contacting a live source with:
+Run an authorized scheduled source with `pnpm ingest:shwoo` or `pnpm ingest:moj-auction`. `pnpm ingest:pcc` intentionally fails closed while its policy is `REVIEW_REQUIRED`. Judicial records use a private, human-reviewed official-link manifest:
+
+```bash
+python -m ingest sync --source judicial --manifest ./private/judicial-official-links.json
+```
+
+The synthetic shape-only example is in `services/ingest/examples/judicial-manifest.example.json`; never commit a real manifest. Administrative Enforcement uses the documented private manifest and `pnpm ingest:moj-enforcement`; no CAPTCHA is automated. Reprocess stored artifacts without contacting a live source with:
 
 ```bash
 pnpm ingest:reprocess -- --from-parser-version 1.0.0

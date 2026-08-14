@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeMarketplaceCursor, deriveRiskBadges, encodeMarketplaceCursor, groupSignedPhotoUrls, matchesFilters } from "./data";
+import { decodeMarketplaceCursor, deriveRiskBadges, encodeMarketplaceCursor, groupSignedPhotoUrls, mapOfficialDocument, matchesFilters } from "./data";
 import { fixtureMotorcycles } from "./fixtures";
 
 describe("marketplace filters", () => {
@@ -14,12 +14,38 @@ describe("marketplace filters", () => {
     expect(fixtureMotorcycles[7]!.manufactureMonth).toBeNull();
   });
   it("filters nationwide procurement and disposal origin independently", () => {
-    expect(matchesFilters(fixtureMotorcycles[3]!, { source: "pcc", disposalOrigin: "SCRAP_DISPOSAL" })).toBe(true);
+    expect(matchesFilters(fixtureMotorcycles[3]!, { source: "pcc", disposalOrigin: "SCRAP_DISPOSAL", marketView: "scrap" })).toBe(true);
     expect(matchesFilters(fixtureMotorcycles[4]!, { source: "pcc", disposalOrigin: "SCRAP_DISPOSAL" })).toBe(false);
   });
   it("filters Judicial Yuan execution auctions independently", () => {
     expect(matchesFilters(fixtureMotorcycles[5]!, { source: "judicial", disposalOrigin: "JUDICIAL_EXECUTION" })).toBe(true);
     expect(matchesFilters(fixtureMotorcycles[5]!, { source: "pcc" })).toBe(false);
+  });
+  it("supports favorites for every identified judicial vehicle", () => {
+    const judicialVehicles = fixtureMotorcycles.filter((item) => item.source === "judicial");
+    expect(judicialVehicles).toHaveLength(7);
+    expect(judicialVehicles.every((item) => item.favoriteSupported)).toBe(true);
+  });
+  it("keeps scrap and recycler-only lots out of every normal shopping view", () => {
+    expect(matchesFilters(fixtureMotorcycles[3]!, { marketView: "active" })).toBe(false);
+    expect(matchesFilters(fixtureMotorcycles[3]!, { marketView: "all" })).toBe(false);
+    expect(matchesFilters(fixtureMotorcycles[3]!, { marketView: "scrap" })).toBe(true);
+    expect(matchesFilters(fixtureMotorcycles[0]!, { marketView: "scrap" })).toBe(false);
+  });
+  it("filters official motorcycle class without inferring unknown bulk lots", () => {
+    expect(matchesFilters(fixtureMotorcycles[5]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(true);
+    expect(matchesFilters(fixtureMotorcycles[1]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(false);
+  });
+  it("filters non-overlapping displacement bands and keeps missing CC explicit", () => {
+    expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["CC_51_125"] })).toBe(true);
+    expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["CC_126_250"] })).toBe(false);
+    const unknownDisplacement = fixtureMotorcycles.find((item) => item.displacementCc === null);
+    expect(unknownDisplacement).toBeDefined();
+    expect(matchesFilters(unknownDisplacement!, { displacementBands: ["UNKNOWN"] })).toBe(true);
+  });
+  it("excludes unknown auction dates from a future deadline filter", () => {
+    const unknownDate = { ...fixtureMotorcycles[0]!, auctionAt: null };
+    expect(matchesFilters(unknownDate, { marketView: "active", auctionWithinDays: 30 })).toBe(false);
   });
   it("keeps ended records out of the active marketplace without marking them sold", () => {
     const ended = { ...fixtureMotorcycles[0]!, auctionAt: "2020-01-01T00:00:00Z", auctionStatus: "SCHEDULED" as const };
@@ -68,5 +94,23 @@ describe("official photo aggregation", () => {
 
     expect(grouped.get("vehicle-1")).toEqual(["https://signed.test/first", "https://signed.test/second"]);
     expect(grouped.get("lot-1")).toEqual(["https://signed.test/lot"]);
+  });
+});
+
+describe("official document links", () => {
+  it("links to the publisher even when a private evidence copy exists", () => {
+    expect(mapOfficialDocument({
+      id: "doc-1",
+      title: "法院拍賣公告",
+      document_type: "PDF",
+      official_url: "https://court.example.gov.tw/notice.pdf",
+      raw_artifacts: { storage_path: "private/checksum.pdf" },
+    })).toEqual({
+      id: "doc-1",
+      title: "法院拍賣公告",
+      documentType: "PDF",
+      url: "https://court.example.gov.tw/notice.pdf",
+      cached: true,
+    });
   });
 });

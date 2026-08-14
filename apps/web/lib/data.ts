@@ -1,4 +1,4 @@
-import { isEndedAuction, sortMotorcycles, type Motorcycle, type MotorcycleFilters, type SourceSummary } from "@tm-ai/shared";
+import { isEndedAuction, isScrapMarketplaceRecord, matchesDisplacementBand, sortMotorcycles, type Motorcycle, type MotorcycleFilters, type SourceSummary } from "@tm-ai/shared";
 import { fixtureMotorcycles, fixtureSources } from "./fixtures";
 import { countyFromLocation } from "./labels";
 import { createSupabaseServerClient } from "./supabase-server";
@@ -7,6 +7,13 @@ import type { Viewer } from "./auth";
 type MarketplaceSort = NonNullable<MotorcycleFilters["sort"]>;
 type MarketplaceCursor = { version: 1; sort: MarketplaceSort; value: string | number | null; id: string };
 type ListingPhotoRow = { vehicle_id: string | null; lot_id: string | null; storage_path: string | null };
+type AuctionDocumentRow = {
+  id: string;
+  title: string;
+  document_type: string | null;
+  official_url: string;
+  raw_artifacts?: { storage_path?: string | null } | null;
+};
 
 const VALID_SORTS = new Set<MarketplaceSort>(["auction_asc", "auction_desc", "price_asc", "price_desc", "completeness_desc"]);
 
@@ -39,6 +46,21 @@ export function groupSignedPhotoUrls(photoRows: ListingPhotoRow[], signedByPath:
   return imagesByListing;
 }
 
+/**
+ * Public document actions must always return to the publisher's copy.
+ * A private checksum copy may exist for evidence/reprocessing, but it must not
+ * silently replace the official notice with a temporary Storage URL.
+ */
+export function mapOfficialDocument(entry: AuctionDocumentRow): NonNullable<Motorcycle["documents"]>[number] {
+  return {
+    id: entry.id,
+    title: entry.title,
+    documentType: entry.document_type,
+    url: entry.official_url,
+    cached: Boolean(entry.raw_artifacts?.storage_path),
+  };
+}
+
 function cursorValue(item: Motorcycle, sort: MarketplaceSort): string | number | null {
   if (sort === "price_asc" || sort === "price_desc") return item.soldPrice ?? item.currentPrice ?? item.reservePrice;
   if (sort === "completeness_desc") return item.completeness;
@@ -62,6 +84,8 @@ export function deriveRiskBadges(motorcycle: Pick<Motorcycle, "bidEligibility" |
 }
 
 export function matchesFilters(motorcycle: Motorcycle, filters: MotorcycleFilters): boolean {
+  const scrapRecord = isScrapMarketplaceRecord(motorcycle);
+  if (filters.marketView === "scrap" ? !scrapRecord : scrapRecord) return false;
   const keyword = filters.keyword?.trim().toLocaleLowerCase("zh-TW");
   if (keyword) {
     const haystack = [motorcycle.name, motorcycle.brand, motorcycle.model, motorcycle.plateNumber, motorcycle.officialTitle, motorcycle.organization, motorcycle.location]
@@ -74,6 +98,8 @@ export function matchesFilters(motorcycle: Motorcycle, filters: MotorcycleFilter
   if (filters.brand && motorcycle.brand !== filters.brand) return false;
   if (filters.eligibility && motorcycle.bidEligibility !== filters.eligibility) return false;
   if (filters.registration && motorcycle.registrationStatus !== filters.registration) return false;
+  if (filters.vehicleClass && motorcycle.vehicleClass !== filters.vehicleClass) return false;
+  if (filters.displacementBands?.length && !filters.displacementBands.some((band) => matchesDisplacementBand(motorcycle.displacementCc, band))) return false;
   if (filters.hasPhotos === true && !(motorcycle.imageUrls?.length || motorcycle.imageUrl)) return false;
   if (filters.singleVehicle === true && motorcycle.bulkLot) return false;
   if (filters.excludeScrap === true && ["SCRAP_ONLY", "CANNOT_RELICENSE"].includes(motorcycle.registrationStatus)) return false;
@@ -83,7 +109,8 @@ export function matchesFilters(motorcycle: Motorcycle, filters: MotorcycleFilter
   const price = motorcycle.soldPrice ?? motorcycle.currentPrice ?? motorcycle.reservePrice;
   if (filters.minPrice !== undefined && (price === null || price < filters.minPrice)) return false;
   if (filters.maxPrice !== undefined && (price === null || price > filters.maxPrice)) return false;
-  if (filters.auctionWithinDays && motorcycle.auctionAt) {
+  if (filters.auctionWithinDays) {
+    if (!motorcycle.auctionAt) return false;
     const delta = new Date(motorcycle.auctionAt).getTime() - Date.now();
     if (delta < 0 || delta > filters.auctionWithinDays * 86_400_000) return false;
   }
@@ -99,6 +126,7 @@ function mapRow(row: Record<string, unknown>, favorite = false): Motorcycle {
     officialTitle: String(row.official_title ?? "未命名標售"), name: [row.brand_name, row.model_name].filter(Boolean).join(" ") || String(row.official_title),
     brand: row.brand_name as string | null, model: row.model_name as string | null, manufactureYear: row.manufacture_year as number | null,
     manufactureMonth: row.manufacture_month as number | null,
+    vehicleClass: (row.vehicle_category ?? "UNKNOWN") as Motorcycle["vehicleClass"],
     displacementCc: row.displacement_cc as number | null, plateNumber: row.plate_number as string | null, color: row.color as string | null,
     organization: String(row.organization_name ?? "未辨識機關"), location, county: (row.county as string | null) ?? countyFromLocation(location),
     disposalOrigin: row.disposal_origin as Motorcycle["disposalOrigin"], auctionStatus: row.auction_status as Motorcycle["auctionStatus"],
@@ -120,6 +148,13 @@ function mapRow(row: Record<string, unknown>, favorite = false): Motorcycle {
 
 function applyDatabaseFilters(query: any, filters: MotorcycleFilters, favoriteIds: Set<string>, now: Date) {
   const nowIso = now.toISOString();
+  if (filters.marketView === "scrap") {
+    query = query.or("disposal_origin.eq.SCRAP_DISPOSAL,registration_status.in.(SCRAP_ONLY,CANNOT_RELICENSE),eligibility.eq.LICENSED_RECYCLER_ONLY");
+  } else {
+    query = query.not("disposal_origin", "eq", "SCRAP_DISPOSAL")
+      .not("registration_status", "in", "(SCRAP_ONLY,CANNOT_RELICENSE)")
+      .not("eligibility", "eq", "LICENSED_RECYCLER_ONLY");
+  }
   if (filters.marketView === "active") query = query.not("auction_status", "in", "(SOLD,UNSOLD,WITHDRAWN,CANCELLED,EXPIRED)").or(`auction_at.is.null,auction_at.gte.${nowIso}`);
   if (filters.marketView === "ended") query = query.or(`auction_status.in.(SOLD,UNSOLD,WITHDRAWN,CANCELLED,EXPIRED),auction_at.lt.${nowIso}`);
   if (filters.marketView === "favorites") query = query.in("id", [...favoriteIds]);
@@ -131,6 +166,18 @@ function applyDatabaseFilters(query: any, filters: MotorcycleFilters, favoriteId
   if (filters.brand) query = query.eq("brand_name", filters.brand);
   if (filters.eligibility) query = query.eq("eligibility", filters.eligibility);
   if (filters.registration) query = query.eq("registration_status", filters.registration);
+  if (filters.vehicleClass) query = query.eq("vehicle_category", filters.vehicleClass);
+  if (filters.displacementBands?.length) {
+    const clauses = filters.displacementBands.map((band) => {
+      if (band === "UNKNOWN") return "displacement_cc.is.null";
+      if (band === "LE_50") return "displacement_cc.lte.50";
+      if (band === "CC_51_125") return "and(displacement_cc.gte.51,displacement_cc.lte.125)";
+      if (band === "CC_126_250") return "and(displacement_cc.gte.126,displacement_cc.lte.250)";
+      if (band === "CC_251_550") return "and(displacement_cc.gte.251,displacement_cc.lte.550)";
+      return "displacement_cc.gt.550";
+    });
+    query = query.or(clauses.join(","));
+  }
   if (filters.singleVehicle) query = query.eq("bulk_lot", false);
   if (filters.hasPhotos) query = query.eq("has_cached_photo", true);
   if (filters.excludeScrap) query = query.not("registration_status", "in", "(SCRAP_ONLY,CANNOT_RELICENSE)");
@@ -256,12 +303,7 @@ export async function getMotorcycle(id: string, viewer: Viewer): Promise<Motorcy
     reviewStatus: entry.review_status,
     matchingSignals: entry.matching_signals ?? {},
   }));
-  motorcycle.documents = await Promise.all((documents ?? []).map(async (entry: any) => {
-    const storagePath = entry.raw_artifacts?.storage_path as string | undefined;
-    if (!storagePath) return { id: entry.id, title: entry.title, documentType: entry.document_type, url: entry.official_url, cached: false };
-    const { data: signed } = await supabase.storage.from("raw-artifacts").createSignedUrl(storagePath, 3600);
-    return { id: entry.id, title: entry.title, documentType: entry.document_type, url: signed?.signedUrl ?? entry.official_url, cached: Boolean(signed?.signedUrl) };
-  }));
+  motorcycle.documents = (documents ?? []).map((entry: any) => mapOfficialDocument(entry));
   return motorcycle;
 }
 

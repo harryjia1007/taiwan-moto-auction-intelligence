@@ -5,7 +5,7 @@ import { ArrowLeft, CalendarClock, CheckCircle2, CircleHelp, ExternalLink, FileS
 import { formatMoney, isEndedAuction, quickSummary } from "@tm-ai/shared";
 import { requireViewer } from "@/lib/auth";
 import { getMotorcycle } from "@/lib/data";
-import { disposalOriginLabels, eligibilityLabels, fourStateLabels, registrationLabels } from "@/lib/labels";
+import { disposalOriginLabels, eligibilityLabels, fourStateLabels, motorcycleClassLabels, registrationLabels } from "@/lib/labels";
 import { FavoriteButton } from "@/components/favorite-button";
 import { PhotoGallery } from "@/components/photo-gallery";
 
@@ -42,10 +42,10 @@ export default async function MotorcycleDetailPage({ params }: { params: Promise
   const displayPrice = moto.soldPrice ?? moto.currentPrice ?? moto.reservePrice;
   const displayPriceLabel = moto.soldPrice !== null ? "官方成交價" : moto.currentPrice !== null ? "目前出價" : "公告底價";
   const officialActionLabel = moto.source === "judicial"
-    ? "查看這台機車的法院公告 PDF"
-    : ended ? "查看這筆機車的官方歷史公告" : "查看這筆機車的官方公告";
+    ? viewer.fixture ? "查看司法院法拍來源（合成測試）" : "查看官方完整法院公告"
+    : ended ? "查看官方完整歷史公告" : "查看官方完整公告";
   const missingFacts = [
-    !moto.brand && "廠牌", !moto.model && "型號", !moto.manufactureYear && "出廠年月", moto.mileageKm === null && "里程",
+    moto.vehicleClass === "UNKNOWN" && "機車級別", !moto.brand && "廠牌", !moto.model && "型號", !moto.manufactureYear && "出廠年月", moto.mileageKm === null && "里程",
     moto.hasKey === "UNKNOWN" && "鑰匙", moto.canStart === "UNKNOWN" && "能否發動", moto.canTest === "UNKNOWN" && "能否測試",
     ["UNKNOWN","REGISTRABILITY_UNKNOWN"].includes(moto.registrationStatus) && "可否領牌", moto.bidEligibility === "UNKNOWN" && "投標資格",
   ].filter((value): value is string => Boolean(value));
@@ -67,7 +67,7 @@ export default async function MotorcycleDetailPage({ params }: { params: Promise
       <div className="detail-panel">
         <div className="detail-source"><ShieldCheck size={15}/><span>官方來源</span><strong>{moto.organization}</strong></div>
         <h1>{moto.name}</h1><p className="detail-official-title">{moto.officialTitle}</p>
-        <div className="badges detail-badges"><Badge tone={ended ? "neutral" : "good"}>{ended ? "歷史紀錄" : "仍可參與"}</Badge><Badge tone="info">{disposalOriginLabels[moto.disposalOrigin]}</Badge><Badge tone={moto.bidEligibility === "LICENSED_RECYCLER_ONLY" ? "danger" : moto.bidEligibility === "UNKNOWN" ? "warn" : "good"}>{eligibilityLabels[moto.bidEligibility]}</Badge><Badge tone={moto.registrationStatus === "SCRAP_ONLY" ? "danger" : moto.registrationStatus === "NORMAL_TRANSFER" ? "good" : "warn"}>{registrationLabels[moto.registrationStatus]}</Badge>{moto.bulkLot && <Badge tone="warn">{moto.lotSize > 1 ? `整批 ${moto.lotSize} 臺` : "整批數量未確認"}</Badge>}</div>
+        <div className="badges detail-badges"><Badge tone={ended ? "neutral" : "good"}>{ended ? "歷史紀錄" : "仍可參與"}</Badge><Badge tone="info">{motorcycleClassLabels[moto.vehicleClass]}</Badge><Badge tone="info">{disposalOriginLabels[moto.disposalOrigin]}</Badge><Badge tone={moto.bidEligibility === "LICENSED_RECYCLER_ONLY" ? "danger" : moto.bidEligibility === "UNKNOWN" ? "warn" : "good"}>{eligibilityLabels[moto.bidEligibility]}</Badge><Badge tone={moto.registrationStatus === "SCRAP_ONLY" ? "danger" : moto.registrationStatus === "NORMAL_TRANSFER" ? "good" : "warn"}>{registrationLabels[moto.registrationStatus]}</Badge>{moto.bulkLot && <Badge tone="warn">{moto.lotSize > 1 ? `整批 ${moto.lotSize} 臺` : "整批數量未確認"}</Badge>}</div>
         <div className="detail-bid-grid">
           <div><span>{displayPriceLabel}</span><strong>{formatMoney(displayPrice)}</strong><small>{moto.auctionRound ? `第 ${moto.auctionRound} 拍` : "拍次未確認"}</small></div>
           <div><span><CalendarClock size={15}/> {moto.auctionDatePrecision === "DATE" ? "拍賣日期" : "拍賣時間"}</span><strong>{displayAuctionDate(moto.auctionAt, moto.auctionDatePrecision)}</strong><small>{deadlineLabel(moto.auctionAt, ended)}</small></div>
@@ -99,7 +99,7 @@ export default async function MotorcycleDetailPage({ params }: { params: Promise
         <div><dt>有無鑰匙</dt><dd>{fourStateLabels[moto.hasKey]}</dd></div><div><dt>能否發動</dt><dd>{fourStateLabels[moto.canStart]}</dd></div><div><dt>能否測試</dt><dd>{fourStateLabels[moto.canTest]}</dd></div>
       </dl></section>
       <section className="section"><h2>車輛與車況</h2><dl className="definition-grid">
-        <div><dt>廠牌／型號</dt><dd>{[moto.brand,moto.model].filter(Boolean).join(" ") || "未確認"}</dd></div><div><dt>出廠年月</dt><dd>{manufactureDate}</dd></div>
+        <div><dt>機車級別</dt><dd>{motorcycleClassLabels[moto.vehicleClass]}</dd></div><div><dt>廠牌／型號</dt><dd>{[moto.brand,moto.model].filter(Boolean).join(" ") || "未確認"}</dd></div><div><dt>出廠年月</dt><dd>{manufactureDate}</dd></div>
         <div><dt>排氣量</dt><dd>{moto.displacementCc ? `${moto.displacementCc} c.c.` : "未確認"}</dd></div><div><dt>車牌</dt><dd>{moto.plateNumber ?? "未確認"}</dd></div>
         <div><dt>里程</dt><dd>{moto.mileageKm === null ? "未確認" : `${moto.mileageKm.toLocaleString("zh-TW")} km`}</dd></div><div><dt>顏色</dt><dd>{moto.color ?? "未確認"}</dd></div>
       </dl>{moto.conditionSummary && <p>{moto.conditionSummary}</p>}</section>
@@ -116,7 +116,7 @@ export default async function MotorcycleDetailPage({ params }: { params: Promise
       </section>
       <section className="section"><h2>拍賣歷史</h2>{moto.history.length ? <div className="history">{moto.history.map((point,index)=>{const price=point.soldPrice??point.currentPrice??point.reservePrice??0;return <div className="history-row" key={`${point.observedAt}-${index}`}><span>{displayDate(point.observedAt)}</span><span className="history-bar"><i style={{width:`${Math.max(3,(price/maxHistory)*100)}%`}}/></span><strong>{formatMoney(price)}</strong></div>})}</div> : <p className="muted">目前只有首次觀測。後續同步會追加快照，不覆寫歷史價格。</p>}</section>
       <section className="section" id="evidence"><div className="section-heading"><span>TRACEABLE FACTS</span><h2>官方證據</h2></div>{moto.evidence.length ? moto.evidence.map((evidence)=><article className="evidence" key={evidence.id}><Badge tone="info">{evidenceLabels[evidence.fieldName] ?? evidence.fieldName}</Badge><blockquote>「{evidence.sourceText}」</blockquote><small>{evidence.trust} · 信心 {(evidence.confidence*100).toFixed(0)}% · <a className="official-link" href={evidence.officialUrl} target="_blank" rel="noreferrer">核對官方來源</a></small></article>) : <p className="muted">這筆開發資料尚未載入欄位級證據；請查看官方原始頁面。</p>}</section>
-      <section className="section"><h2>文件與來源歷史</h2><p><FileSearch size={17} style={{display:"inline",verticalAlign:"-3px"}}/> {moto.sourceName} · 來源記錄 {moto.sourceAuid}</p>{moto.documents?.length ? <div className="evidence">{moto.documents.map((document)=><p key={document.id}><a className="official-link" href={document.url} target="_blank" rel="noreferrer">{document.title}</a> <small>· {document.cached ? "私有快取簽名連結（1 小時）" : "官方連結"}</small></p>)}</div> : <p className="muted">正式同步後，官方公告 PDF 或附件會在此提供私有簽名連結。</p>}<p className="muted">原始 HTML、JSON、PDF、圖片與後續解析版本會以 checksum 保存；目前頁面不因來源消失而自動標記為已售出。</p></section>
+      <section className="section"><h2>官方全文與來源歷史</h2><p><FileSearch size={17} style={{display:"inline",verticalAlign:"-3px"}}/> {moto.sourceName} · 來源記錄 {moto.sourceAuid}</p>{moto.documents?.length ? <div className="evidence">{moto.documents.map((document)=><p key={document.id}><a className="official-link" href={document.url} target="_blank" rel="noreferrer">查看官方完整全文：{document.title}</a> <small>· 外部官方連結，本站不公開鏡像{document.cached ? "；另有私人稽核副本" : ""}</small></p>)}</div> : <p className="muted">正式同步取得官方文件網址後，會在此直接連回發布機關的完整公告；不以本站副本取代官方版本。</p>}<p className="muted">系統可為正確性稽核私下保存 checksum 與解析紀錄；公開閱讀一律回到官方來源。來源頁面消失不會被自動標記為已售出。</p></section>
       <section className="section"><h2>可能重複標的</h2>{moto.duplicateCandidates.length ? moto.duplicateCandidates.map((candidate)=><article className="evidence" key={candidate.id}><Badge tone="warn">相似度 {(candidate.score*100).toFixed(0)}%</Badge><p>候選車輛 {candidate.counterpartVehicleId}</p><small>{candidate.reviewStatus} · {Object.keys(candidate.matchingSignals).join("、") || "未提供比對訊號"}</small></article>) : <p className="muted">目前沒有待人工審核的重複候選。系統只提示候選，不會自動合併模糊比對結果。</p>}</section>
     </div><aside className="sticky"><section className="section risk-panel"><h2><ShieldAlert size={20}/>重要風險</h2><div className="badges">{moto.riskBadges.length ? moto.riskBadges.map((risk)=><Badge tone="warn" key={risk}>{risk}</Badge>) : <Badge>尚無明確風險標記</Badge>}</div></section>
       <section className="section checklist stacked-section"><h2><CheckCircle2 size={20}/>投標前檢查</h2><ol><li>確認一般民眾是否有投標資格</li><li>確認可否過戶、重新領牌與道路使用</li><li>預約現場看車，核對車身／引擎號碼</li><li>估算修復、補稅、拖運與領牌成本</li><li>回到官方公告確認截止時間與付款條件</li></ol></section>

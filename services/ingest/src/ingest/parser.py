@@ -18,6 +18,7 @@ from ingest.models import (
     ParsedVehicleUnit,
     RawArtifact,
     RegistrationStatus,
+    VehicleClass,
     VehicleIdentifier,
 )
 
@@ -33,7 +34,8 @@ def roc_datetime(value: str) -> datetime | None:
     if not match:
         return None
     parts = {key: int(number) if number else 0 for key, number in match.groupdict().items()}
-    return datetime(parts["year"] + 1911, parts["month"], parts["day"], parts["hour"], parts["minute"], parts["second"], tzinfo=TAIPEI)
+    year = parts["year"] + 1911 if parts["year"] < 1911 else parts["year"]
+    return datetime(year, parts["month"], parts["day"], parts["hour"], parts["minute"], parts["second"], tzinfo=TAIPEI)
 
 
 def roc_compact_date(value: str) -> datetime | None:
@@ -57,6 +59,23 @@ def integer(value: str | None) -> int | None:
 
 def normalize_identifier(value: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", value.upper().replace("－", "-"))
+
+
+def motorcycle_class_from_official_text(value: str) -> tuple[VehicleClass, str | None]:
+    """Classify only from explicit official wording; displacement is not proof."""
+    normalized = clean(value)
+    patterns = (
+        (VehicleClass.ELECTRIC_MOTORCYCLE, r"(?:普通輕型|普通重型|大型重型)?電動機車"),
+        (VehicleClass.LARGE_HEAVY, r"大型重型機車|大型重機"),
+        (VehicleClass.ORDINARY_HEAVY, r"普通重型機車"),
+        (VehicleClass.ORDINARY_LIGHT, r"普通輕型機車"),
+        (VehicleClass.HEAVY_UNSPECIFIED, r"重型機車"),
+    )
+    for vehicle_class, pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            return vehicle_class, match.group(0)
+    return VehicleClass.UNKNOWN, None
 
 
 def _field_lines(soup: BeautifulSoup) -> dict[str, str]:
@@ -138,6 +157,282 @@ def _label_value(text: str, labels: tuple[str, ...]) -> str | None:
     return None
 
 
+def official_datetime(value: str) -> datetime | None:
+    slash_date = roc_datetime(value)
+    if slash_date:
+        return slash_date
+    match = re.search(
+        r"(?:中華民國)?(?P<year>\d{2,4})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日"
+        r"(?:[^上下\d]{0,8}(?P<period>上午|下午)?\s*(?P<hour>\d{1,2})?\s*時?\s*(?P<minute>\d{1,2})?\s*分?)?",
+        value,
+    )
+    if not match:
+        return None
+    year = int(match.group("year"))
+    year = year + 1911 if year < 1911 else year
+    hour = int(match.group("hour") or 0)
+    if match.group("period") == "下午" and hour < 12:
+        hour += 12
+    if match.group("period") == "上午" and hour == 12:
+        hour = 0
+    try:
+        return datetime(year, int(match.group("month")), int(match.group("day")), hour, int(match.group("minute") or 0), tzinfo=TAIPEI)
+    except ValueError:
+        return None
+
+
+def _redact_personal_data(value: str) -> str:
+    redacted = re.sub(r"(?<![A-Z0-9])[A-Z][12]\d{8}(?!\d)", "[已移除身分證字號]", value, flags=re.IGNORECASE)
+    redacted = re.sub(r"(義務人|所有人|車主)\s*[：:]?\s*[\u4e00-\u9fff○ＯO]{2,4}", r"\1：[已移除姓名]", redacted)
+    return clean(redacted)
+
+
+def _vehicle_identity(text: str) -> tuple[str | None, str | None, int | None, int | None, int | None, str | None, list[str]]:
+    brand_raw = _label_value(text, ("廠牌名稱", "廠牌", "廠商"))
+    brand_aliases = {"光陽": "KYMCO", "三陽": "SYM", "山葉": "YAMAHA", "台灣山葉": "YAMAHA"}
+    if not brand_raw:
+        brand_raw = next((alias for alias in ("台灣山葉", "光陽", "三陽", "山葉", "KYMCO", "SYM", "YAMAHA", "HONDA", "SUZUKI", "PGO", "GOGORO", "PIAGGIO") if alias in text.upper()), None)
+    brand = brand_aliases.get(brand_raw or "", brand_raw)
+    model = _label_value(text, ("型號", "型式", "車型"))
+    displacement = integer(_label_value(text, ("排氣量", "汽缸容量")))
+    manufacture = _label_value(text, ("出廠年月", "出廠日期", "出廠年份", "年份", "製造年月"))
+    manufacture_year = None
+    manufacture_month = None
+    if manufacture:
+        date_match = re.search(r"(\d{2,4})\D*(\d{1,2})?", manufacture)
+        if date_match:
+            raw_year = int(date_match.group(1))
+            manufacture_year = raw_year + 1911 if raw_year < 1911 else raw_year
+            manufacture_month = int(date_match.group(2)) if date_match.group(2) else None
+    color = _label_value(text, ("顏色", "車色"))
+    plates: list[str] = []
+    for match in re.finditer(r"(?<![A-Z0-9])([A-Z0-9]{2,4}[-－][A-Z0-9]{2,4})(?![A-Z0-9])", text, re.IGNORECASE):
+        value = match.group(1).replace("－", "-").upper()
+        nearby_label = text[max(0, match.start() - 16):match.start()]
+        # Numeric date fragments look like legacy plate formats. Retain an
+        # all-numeric value only when official text labels it as a plate.
+        if not re.search(r"[A-Z]", value, re.IGNORECASE) and not re.search(r"(?:車牌|牌照)(?:號碼)?\s*[：:]?\s*$", nearby_label):
+            continue
+        if value not in plates:
+            plates.append(value)
+    return brand, model, manufacture_year, manufacture_month, displacement, color, plates
+
+
+def _motorcycle_plate_values(text: str, plates: list[str]) -> list[str]:
+    """Keep only plates whose closest explicit vehicle type is a motorcycle.
+
+    MOJ announcements sometimes combine cars and motorcycles on one page. A
+    page-level motorcycle match is therefore insufficient evidence that every
+    plate belongs to a motorcycle.
+    """
+    motorcycle_pattern = re.compile(
+        r"普通輕型機車|普通重型機車|大型重型機車|大型重機|電動機車|重型機車|機器腳踏車|機車|重機"
+    )
+    other_vehicle_pattern = re.compile(
+        r"自用小客車|自用小貨車|客貨兩用車|小客車|大客車|貨車|汽車|曳引車"
+    )
+    motorcycle_types = [(match.start(), match.end(), True) for match in motorcycle_pattern.finditer(text)]
+    other_types = [(match.start(), match.end(), False) for match in other_vehicle_pattern.finditer(text)]
+    if not other_types:
+        return plates
+
+    type_mentions = motorcycle_types + other_types
+    selected: list[str] = []
+    for plate in plates:
+        plate_pattern = re.compile(re.escape(plate).replace(r"\-", r"[-－]"), re.IGNORECASE)
+        motorcycle_context = False
+        for plate_match in plate_pattern.finditer(text):
+            nearby: list[tuple[int, bool]] = []
+            for start, end, is_motorcycle in type_mentions:
+                distance = start - plate_match.end() if start >= plate_match.end() else plate_match.start() - end if end <= plate_match.start() else 0
+                if 0 <= distance <= 100:
+                    nearby.append((distance, is_motorcycle))
+            if nearby and min(nearby, key=lambda value: value[0])[1]:
+                motorcycle_context = True
+                break
+        if motorcycle_context:
+            selected.append(plate)
+    return selected
+
+
+def _artifact_photo_urls(artifacts: list[RawArtifact]) -> list[str]:
+    return list(dict.fromkeys(str(artifact.official_url) for artifact in artifacts if artifact.mime_type.startswith("image/")))
+
+
+def _explicit_fact_sentence(text: str, pattern: str) -> str | None:
+    return next((clean(sentence) for sentence in re.split(r"[。；;\n]", text) if re.search(pattern, sentence)), None)
+
+
+def parse_moj_auction_detail(item: DiscoveredItem, artifacts: list[RawArtifact]) -> ParsedAuctionRecord:
+    """Parse the MOJ centralized seized-property page without inventing PDF-only facts."""
+    html = next((artifact for artifact in artifacts if artifact.mime_type == "text/html"), None)
+    soup = BeautifulSoup(html.content, "html.parser") if html else BeautifulSoup("", "html.parser")
+    title_node = soup.select_one("h2.title")
+    title = clean(title_node.get_text(" ", strip=True) if title_node else item.title)
+    body_node = soup.select_one("section.cp")
+    body = clean(body_node.get_text(" ", strip=True) if body_node else "")
+    combined = _redact_personal_data(f"{title} {body}")
+    if not re.search(r"(機車|機器腳踏車|重機)", combined):
+        raise ValueError("MOJ record does not explicitly identify a motorcycle")
+
+    organization_meta = soup.select_one("meta[name='DC.Creator']")
+    organization = clean(organization_meta.get("content", "") if organization_meta else str(item.metadata.get("organization") or "")) or "未辨識檢察機關"
+    case_match = re.search(r"(\d{2,3}年度(?:變價|執沒|扣押物|偵)字第[\d、,，至-]+號)", combined)
+    official_case_number = clean(case_match.group(1)) if case_match else None
+    auction_sentence = _explicit_fact_sentence(combined, r"拍賣(?:時間|日期)") or combined
+    auction_at = official_datetime(auction_sentence)
+    explicit_sold = bool(re.search(r"(已拍賣完畢|拍定(?:金額|價格|日期)|以新臺幣[\d,]+元拍定)", combined))
+    status = AuctionStatus.SOLD if explicit_sold else AuctionStatus.EXPIRED if auction_at and auction_at < datetime.now(TAIPEI) else AuctionStatus.SCHEDULED if auction_at else AuctionStatus.ANNOUNCED
+    round_match = re.search(r"第\s*(\d+)\s*(?:次|拍)", combined)
+    auction_round = int(round_match.group(1)) if round_match else None
+    reserve_match = re.search(r"(?:核定)?底價\D{0,8}([\d,]+)", combined)
+    sold_match = re.search(r"(?:拍定金額|拍定價格|成交價)\D{0,8}([\d,]+)", combined)
+    reserve_price = integer(reserve_match.group(1)) if reserve_match else None
+    sold_price = integer(sold_match.group(1)) if sold_match else None
+    location = _label_value(combined, ("拍賣地點", "放置地點", "觀覽地點"))
+    vehicle_class, vehicle_class_text = motorcycle_class_from_official_text(combined)
+    brand, model, manufacture_year, manufacture_month, displacement, color, all_plates = _vehicle_identity(combined)
+    plates = _motorcycle_plate_values(combined, all_plates)
+    lot_match = re.search(r"(?:機車|重機|機器腳踏車)\s*(\d+)\s*[臺台輛部]", combined) or re.search(r"(\d+)\s*[臺台輛部][^。]{0,12}(?:機車|重機|機器腳踏車)", combined)
+    lot_size = int(lot_match.group(1)) if lot_match else 1
+    bulk_lot = lot_size > 1 or bool(re.search(r"(?:機車|重機|機器腳踏車)[^。]{0,8}(?:一批|整批)", combined))
+
+    recycler = bool(re.search(r"(廢機動車輛回收|合格回收商|回收業資格)", combined))
+    eligibility = BidEligibility.LICENSED_RECYCLER_ONLY if recycler else BidEligibility.NATURAL_PERSON_ALLOWED if re.search(r"(國民身分證|有意承購者|到場競買)", combined) else BidEligibility.UNKNOWN
+    if re.search(r"(不得再領牌|不可再領牌|僅供報廢)", combined):
+        registration = RegistrationStatus.SCRAP_ONLY
+    elif "可再領牌" in combined or "重新領牌" in combined:
+        registration = RegistrationStatus.RE_REGISTRATION_REQUIRED
+    elif re.search(r"(得辦理移轉過戶|可辦理移轉過戶)", combined):
+        registration = RegistrationStatus.NORMAL_TRANSFER
+    else:
+        registration = RegistrationStatus.UNKNOWN
+    has_key = FourState.NO if "無鑰匙" in combined else FourState.YES if "有鑰匙" in combined else FourState.UNKNOWN
+    can_start = FourState.NO if re.search(r"(無法發動|不能發動|發不動)", combined) else FourState.YES if re.search(r"(可發動|能發動)", combined) else FourState.UNKNOWN
+    can_test = FourState.NO if re.search(r"(無法測試|不可測試|不得測試)", combined) else FourState.YES if re.search(r"(可測試|提供.{0,8}測試)", combined) else FourState.UNKNOWN
+    identifiers = [VehicleIdentifier(identifier_type="PLATE", normalized_value=normalize_identifier(plate), original_value=plate) for plate in plates]
+    units = [ParsedVehicleUnit(source_vehicle_key=f"plate:{normalize_identifier(plate)}", identifiers=[identifier]) for plate, identifier in zip(plates, identifiers, strict=True)] if len(plates) > 1 else []
+    photo_urls = _artifact_photo_urls(artifacts)
+
+    evidence: list[EvidenceRef] = []
+    for field_name, normalized, source in (
+        ("official_case_number", official_case_number, official_case_number),
+        ("organization", organization, organization),
+        ("ends_at", auction_at.isoformat() if auction_at else None, auction_sentence if auction_at else None),
+        ("vehicle_class", vehicle_class.value, vehicle_class_text),
+        ("registration_status", registration.value, _explicit_fact_sentence(combined, r"(領牌|過戶|報廢)")),
+        ("eligibility", eligibility.value, _explicit_fact_sentence(combined, r"(身分證|承購|競買|回收商)")),
+    ):
+        if source:
+            evidence.append(_evidence(field_name, normalized, source))
+    completeness, groups = _completeness_groups({
+        "identity": [plates, brand, model, vehicle_class if vehicle_class != VehicleClass.UNKNOWN else None],
+        "auction": [organization, auction_at, reserve_price, status, eligibility],
+        "condition": [has_key, can_start, can_test, body],
+        "registration": [registration, plates, FourState.UNKNOWN],
+        "fees": [None, None, None],
+        "media": [photo_urls or [artifact for artifact in artifacts if artifact.mime_type == "application/pdf"]],
+    })
+    return ParsedAuctionRecord(
+        source_record_id=item.source_record_id, official_url=item.official_url, official_title=title,
+        official_case_number=official_case_number, organization=organization,
+        disposal_origin="CRIMINAL_SEIZURE_OR_FORFEITURE", status=status, auction_round=auction_round,
+        ends_at=auction_at, reserve_price=reserve_price, sold_price=sold_price, title=title,
+        lot_size=lot_size, bulk_lot=bulk_lot, eligibility=eligibility, location=location,
+        description=body or None, brand=brand, model=model, manufacture_year=manufacture_year,
+        manufacture_month=manufacture_month, displacement_cc=displacement, vehicle_class=vehicle_class,
+        color=color, has_key=has_key, can_start=can_start, can_test=can_test,
+        registration_status=registration, condition_summary=_explicit_fact_sentence(combined, r"(車況|刮傷|損壞|發動|鑰匙)"),
+        identifiers=identifiers, vehicle_units=units, photo_urls=photo_urls, evidence=evidence,
+        completeness=completeness, completeness_groups=groups,
+    )
+
+
+def parse_moj_enforcement_detail(item: DiscoveredItem, artifacts: list[RawArtifact]) -> ParsedAuctionRecord:
+    """Parse a human-selected official Administrative Enforcement detail URL."""
+    html = next((artifact for artifact in artifacts if artifact.mime_type == "text/html"), None)
+    if not html:
+        raise ValueError("Administrative Enforcement detail HTML is missing")
+    soup = BeautifulSoup(html.content, "html.parser")
+    heading = soup.find("div", class_="title_h3", string=re.compile("公告事項"))
+    notice = heading.find_next("ul") if heading else None
+    lines = [clean(node.get_text(" ", strip=True)) for node in notice.select("li")] if notice else []
+    combined = _redact_personal_data(" ".join(lines))
+    if not re.search(r"(機車|機器腳踏車|重機)", combined):
+        raise ValueError("Administrative Enforcement manifest item is not explicitly a motorcycle")
+    case_match = re.search(r"案號[：:]\s*([A-Z0-9-]+)", combined, re.IGNORECASE)
+    official_case_number = case_match.group(1) if case_match else item.source_record_id
+    date_match = re.search(r"開標日[：:]\s*([\d/]+(?:\s+[\d:]+)?)", combined)
+    auction_at = official_datetime(date_match.group(1)) if date_match else None
+    description = next((line for line in lines if not line.startswith(("案號", "開標日"))), item.title)
+    title = clean(item.title if item.title and item.title != item.source_record_id else description[:120])
+    organization = clean(str(item.metadata.get("organization") or "")) or "法務部行政執行署（分署未確認）"
+    vehicle_class, vehicle_class_text = motorcycle_class_from_official_text(combined)
+    brand, model, manufacture_year, manufacture_month, displacement, color, all_plates = _vehicle_identity(combined)
+    plates = _motorcycle_plate_values(combined, all_plates)
+    mileage_match = re.search(r"(?:里程數|里程|儀表板?所示里程數)[：:]?\s*([\d,]+)\s*(?:km|公里)?", combined, re.IGNORECASE)
+    mileage = integer(mileage_match.group(1)) if mileage_match else None
+    lot_match = re.search(r"(?:機車|重機|機器腳踏車)\s*(\d+)\s*[臺台輛部]", combined) or re.search(r"(\d+)\s*[臺台輛部][^。]{0,12}(?:機車|重機|機器腳踏車)", combined)
+    lot_size = int(lot_match.group(1)) if lot_match else 1
+    bulk_lot = lot_size > 1 or bool(re.search(r"(?:機車|重機|機器腳踏車)[^。]{0,8}(?:一批|整批)", combined))
+    round_match = re.search(r"第\s*(\d+)\s*拍", combined)
+    auction_round = int(round_match.group(1)) if round_match else int(item.metadata["auction_round"]) if item.metadata.get("auction_round") else None
+    sold_match = re.search(r"(?:拍定金額|拍定價格)\D{0,8}([\d,]+)", combined)
+    sold_price = integer(sold_match.group(1)) if sold_match else None
+    reserve_match = re.search(r"(?:核定)?底價\D{0,8}([\d,]+)", combined)
+    reserve_price = integer(reserve_match.group(1)) if reserve_match else None
+    status = AuctionStatus.SOLD if sold_price is not None or "已拍定" in combined else AuctionStatus.EXPIRED if auction_at and auction_at < datetime.now(TAIPEI) else AuctionStatus.SCHEDULED if auction_at else AuctionStatus.ANNOUNCED
+    recycler = bool(re.search(r"(廢機動車輛回收|合格回收商|回收業資格)", combined))
+    eligibility = BidEligibility.LICENSED_RECYCLER_ONLY if recycler else BidEligibility.UNKNOWN
+    if re.search(r"(不得再領牌|不可再領牌|僅供報廢)", combined):
+        registration = RegistrationStatus.SCRAP_ONLY
+    elif re.search(r"(繳銷重領|重新領牌|讓渡重領牌照)", combined):
+        registration = RegistrationStatus.RE_REGISTRATION_REQUIRED
+    elif re.search(r"(得辦理移轉過戶|可辦理移轉過戶|本區新領)", combined):
+        registration = RegistrationStatus.NORMAL_TRANSFER
+    else:
+        registration = RegistrationStatus.UNKNOWN
+    has_key = FourState.NO if "無鑰匙" in combined else FourState.YES if re.search(r"(有鑰匙|附鑰匙)", combined) else FourState.UNKNOWN
+    can_start = FourState.NO if re.search(r"(無法發動|不能發動|發不動)", combined) else FourState.YES if re.search(r"(可發動|能發動)", combined) else FourState.UNKNOWN
+    can_test = FourState.NO if re.search(r"(無法測試|不可測試|不得測試)", combined) else FourState.YES if re.search(r"(可測試|提供.{0,8}測試)", combined) else FourState.UNKNOWN
+    location = _label_value(combined, ("拍賣地點", "放置地點", "觀覽地點", "地點"))
+    fee_notes = [sentence for sentence in (_explicit_fact_sentence(combined, r"(欠稅|燃料費|養護費|罰鍰|鑑定費)"),) if sentence]
+    identifiers = [VehicleIdentifier(identifier_type="PLATE", normalized_value=normalize_identifier(plate), original_value=plate) for plate in plates]
+    units = [ParsedVehicleUnit(source_vehicle_key=f"plate:{normalize_identifier(plate)}", identifiers=[identifier]) for plate, identifier in zip(plates, identifiers, strict=True)] if len(plates) > 1 else []
+    photo_urls = _artifact_photo_urls(artifacts)
+    evidence: list[EvidenceRef] = []
+    for field_name, normalized, source in (
+        ("official_case_number", official_case_number, case_match.group(0) if case_match else None),
+        ("ends_at", auction_at.isoformat() if auction_at else None, date_match.group(0) if date_match else None),
+        ("vehicle_class", vehicle_class.value, vehicle_class_text),
+        ("registration_status", registration.value, _explicit_fact_sentence(combined, r"(領牌|過戶|報廢|牌照狀態)")),
+        ("has_key", has_key.value, _explicit_fact_sentence(combined, r"鑰匙")),
+    ):
+        if source:
+            evidence.append(_evidence(field_name, normalized, source))
+    completeness, groups = _completeness_groups({
+        "identity": [plates, brand, model, vehicle_class if vehicle_class != VehicleClass.UNKNOWN else None],
+        "auction": [organization, auction_at, reserve_price, status, eligibility],
+        "condition": [has_key, can_start, can_test, description],
+        "registration": [registration, plates, FourState.UNKNOWN],
+        "fees": [fee_notes, None, None],
+        "media": [photo_urls],
+    })
+    return ParsedAuctionRecord(
+        source_record_id=item.source_record_id, official_url=item.official_url, official_title=title,
+        official_case_number=official_case_number, organization=organization,
+        disposal_origin="ADMINISTRATIVE_ENFORCEMENT", status=status, auction_round=auction_round,
+        ends_at=auction_at, reserve_price=reserve_price, sold_price=sold_price, fee_notes=fee_notes,
+        title=title, lot_size=lot_size, bulk_lot=bulk_lot, eligibility=eligibility, location=location,
+        description=description, brand=brand, model=model, manufacture_year=manufacture_year,
+        manufacture_month=manufacture_month, displacement_cc=displacement, vehicle_class=vehicle_class,
+        color=color, mileage_km=mileage, has_key=has_key, can_start=can_start, can_test=can_test,
+        registration_status=registration, condition_summary=_explicit_fact_sentence(combined, r"(車況|刮傷|漏油|發動|鑰匙)"),
+        identifiers=identifiers, vehicle_units=units, photo_urls=photo_urls, evidence=evidence,
+        completeness=completeness, completeness_groups=groups,
+    )
+
+
 def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAuctionRecord:
     """Parse one official Judicial Yuan movable-property result row.
 
@@ -164,6 +459,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         case_number = f"{case_year}{case_type}字第{case_serial}號" if case_year and case_type and case_serial else ""
 
     identity_text = clean(" ".join((str(row.get("registeno") or ""), title, notes))).upper()
+    vehicle_class, vehicle_class_text = motorcycle_class_from_official_text(f"{title} {notes}")
     plate_match = re.search(r"(?<![A-Z0-9])([A-Z0-9]{2,4}[-－][A-Z0-9]{2,4})(?![A-Z0-9])", identity_text)
     plate = plate_match.group(1).replace("－", "-") if plate_match else None
     brand_raw = _label_value(notes, ("廠牌", "廠牌名稱"))
@@ -218,6 +514,8 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     ]:
         if source_value:
             evidence.append(_structured_evidence(field_name, normalized, source_value, "notes"))
+    if vehicle_class_text:
+        evidence.append(_structured_evidence("vehicle_class", vehicle_class.value, vehicle_class_text, "ttitle/notes"))
 
     completeness, groups = _completeness_groups({
         "identity": [plate, brand, model, case_number],
@@ -249,6 +547,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         manufacture_year=manufacture_year,
         manufacture_month=manufacture_month,
         displacement_cc=displacement,
+        vehicle_class=vehicle_class,
         color=color,
         registration_status=RegistrationStatus.UNKNOWN,
         condition_summary=notes or None,
@@ -268,6 +567,7 @@ def parse_pcc_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAucti
     qualification = table.get("投標資格摘要", "")
     additional = table.get("附加說明", "")
     combined = clean(" ".join(filter(None, [title, qualification, additional])))
+    vehicle_class, vehicle_class_text = motorcycle_class_from_official_text(combined)
 
     starts_at = roc_datetime(table.get("公告日期", ""))
     ends_at = roc_datetime(table.get("截止投標", ""))
@@ -340,6 +640,8 @@ def parse_pcc_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAucti
     evidence.append(_evidence("disposal_origin", disposal_origin, title, "財物名稱", "OFFICIAL_INFERRED"))
     if vehicle_count is not None:
         evidence.append(_evidence("lot_size", vehicle_count, count_match.group(0), "財物名稱"))
+    if vehicle_class_text:
+        evidence.append(_evidence("vehicle_class", vehicle_class.value, vehicle_class_text, "財物名稱／附加說明"))
 
     completeness, groups = _completeness_groups({
         "identity": [table.get("標案案號"), vehicle_count],
@@ -370,6 +672,7 @@ def parse_pcc_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAucti
         eligibility=eligibility,
         location=location,
         description=description,
+        vehicle_class=vehicle_class,
         registration_status=registration,
         condition_summary=additional or None,
         evidence=evidence,
@@ -407,7 +710,9 @@ def parse_shwoo_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAuc
     payment_deadline = roc_datetime(payment_text) if payment_text else None
     pickup_deadline = roc_datetime(pickup_text) if pickup_text else None
 
-    if "取消" in full_text:
+    # Do not treat navigation/actions such as 「取消追蹤」 as an auction cancellation.
+    # Require the official text to connect cancellation to the auction/notice itself.
+    if re.search(r"(?:本標案|本拍賣|本公告|本案)(?:已|業經|因故)?取消|狀態[：:]?已取消", full_text):
         status = AuctionStatus.CANCELLED
     elif sold_price is not None and (item.result_record or "結案" in full_text):
         status = AuctionStatus.SOLD
@@ -422,6 +727,7 @@ def parse_shwoo_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAuc
     description = clean(description_match.group(1)) if description_match else None
     registration_text = fields.get("牌照異動登記", "")
     combined = clean(" ".join(filter(None, [registration_text, description])))
+    vehicle_class, vehicle_class_text = motorcycle_class_from_official_text(f"{title} {combined}")
     fee_notes = list(dict.fromkeys(
         clean(sentence) for sentence in re.split(r"[。；]", combined)
         if re.search(r"(手續費|規費|拖吊費|保管費|過戶費|稅費|燃料費)", sentence)
@@ -469,7 +775,8 @@ def parse_shwoo_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAuc
     color_match = re.search(r"車身號碼[：:]?\s*[A-Z0-9-]+\s*([\u4e00-\u9fff]{1,3}色)", combined)
     mileage_match = re.search(r"(?:里程|公里數)[：:]?\s*([\d,]+)", combined)
 
-    plate_values = list(dict.fromkeys(re.findall(r"[A-Z0-9]{2,4}[－-][A-Z0-9]{2,4}", combined, re.IGNORECASE)))
+    identity_text = clean(" ".join([title, combined, " ".join(table.values()), " ".join(fields.values())]))
+    plate_values = list(dict.fromkeys(re.findall(r"[A-Z0-9]{2,4}[－-][A-Z0-9]{2,4}", identity_text, re.IGNORECASE)))
     identifiers: list[VehicleIdentifier] = []
     if plate_values:
         original = plate_values[0]
@@ -524,6 +831,8 @@ def parse_shwoo_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAuc
         evidence.append(_evidence("tax_arrears", tax_arrears.value, "無欠稅"))
     if no_fines:
         evidence.append(_evidence("fine_arrears", fine_arrears.value, "無道路交通違規事件"))
+    if vehicle_class_text:
+        evidence.append(_evidence("vehicle_class", vehicle_class.value, vehicle_class_text))
 
     group_values = {
         "identity": [brand, model, year_match, displacement_match, identifiers],
@@ -573,6 +882,7 @@ def parse_shwoo_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAuc
         manufacture_year=int(year_match.group(1)) if year_match else None,
         manufacture_month=int(year_match.group(2)) if year_match and year_match.group(2) else None,
         displacement_cc=integer(displacement_match.group(1)) if displacement_match else None,
+        vehicle_class=vehicle_class,
         color=color_match.group(1) if color_match else None,
         mileage_km=integer(mileage_match.group(1)) if mileage_match else None,
         has_key=has_key,

@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.adapters.base import SourceAdapter
+from ingest.adapters.base import SourceAdapter, contact_user_agent, enforce_http_status
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SourceHealth
 from ingest.parser import parse_shwoo_detail
 
@@ -21,7 +21,10 @@ class ShwooAdapter(SourceAdapter):
     BROWSE_URL = f"{BASE_URL}/shwoo/browse/browse00/"
     RESULTS_URL = f"{BASE_URL}/shwoo/newproduct/newproduct00/bidresult"
     ALLOWED_HOSTS = {"shwoo.gov.taipei"}
-    KEYWORDS = ("機車", "機器腳踏車", "重機", "電動機車", "汽機車")
+    KEYWORDS = (
+        "機車", "機器腳踏車", "普通輕型機車", "普通重型機車",
+        "大型重型機車", "重型機車", "重機", "電動機車", "汽機車",
+    )
     MAX_BYTES = 25 * 1024 * 1024
     ALLOWED_MIME = ("text/html", "image/jpeg", "image/png", "image/webp")
 
@@ -29,7 +32,7 @@ class ShwooAdapter(SourceAdapter):
         self.client = client or httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(20),
-            headers={"User-Agent": "TaiwanMotoAuctionIntelligence/0.1 (+personal read-only research)"},
+            headers={"User-Agent": contact_user_agent("0.4")},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
@@ -56,7 +59,7 @@ class ShwooAdapter(SourceAdapter):
                 try:
                     response = await self.client.request(method, url, **kwargs)
                     self._last_request = time.monotonic()
-                    response.raise_for_status()
+                    enforce_http_status(response)
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response

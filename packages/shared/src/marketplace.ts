@@ -1,3 +1,4 @@
+import type { DisplacementBand } from "./enums";
 import type { Motorcycle, MotorcycleFilters } from "./types";
 
 const ENDED_STATUSES = new Set(["SOLD", "UNSOLD", "WITHDRAWN", "CANCELLED", "EXPIRED"]);
@@ -7,6 +8,37 @@ export function isEndedAuction(motorcycle: Pick<Motorcycle, "auctionStatus" | "a
   if (!motorcycle.auctionAt) return false;
   const timestamp = new Date(motorcycle.auctionAt).getTime();
   return Number.isFinite(timestamp) && timestamp < now.getTime();
+}
+
+export function isScrapMarketplaceRecord(
+  motorcycle: Pick<Motorcycle, "disposalOrigin" | "registrationStatus" | "bidEligibility">,
+): boolean {
+  return motorcycle.disposalOrigin === "SCRAP_DISPOSAL"
+    || ["SCRAP_ONLY", "CANNOT_RELICENSE"].includes(motorcycle.registrationStatus)
+    || motorcycle.bidEligibility === "LICENSED_RECYCLER_ONLY";
+}
+
+export const DISPLACEMENT_QUERY_VALUES: Record<DisplacementBand, string> = {
+  LE_50: "le-50",
+  CC_51_125: "51-125",
+  CC_126_250: "126-250",
+  CC_251_550: "251-550",
+  GT_550: "gt-550",
+  UNKNOWN: "unknown",
+};
+
+export function displacementBandFromQuery(value: string): DisplacementBand | null {
+  return (Object.entries(DISPLACEMENT_QUERY_VALUES).find(([, query]) => query === value)?.[0] as DisplacementBand | undefined) ?? null;
+}
+
+export function matchesDisplacementBand(value: number | null, band: DisplacementBand): boolean {
+  if (band === "UNKNOWN") return value === null;
+  if (value === null || !Number.isFinite(value) || value <= 0) return false;
+  if (band === "LE_50") return value <= 50;
+  if (band === "CC_51_125") return value >= 51 && value <= 125;
+  if (band === "CC_126_250") return value >= 126 && value <= 250;
+  if (band === "CC_251_550") return value >= 251 && value <= 550;
+  return value > 550;
 }
 
 function priceOf(motorcycle: Motorcycle): number | null {

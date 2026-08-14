@@ -6,10 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY pyproject.toml requirements.lock ./
-COPY src ./src
-RUN pip install --no-cache-dir -r requirements.lock && pip install --no-cache-dir --no-deps .
-
+RUN pip install --no-cache-dir -r requirements.lock
 RUN useradd --create-home --uid 10001 ingest
+
+COPY src ./src
+RUN pip install --no-cache-dir --no-deps .
+
 USER ingest
 
 ENTRYPOINT ["python", "-m", "ingest"]

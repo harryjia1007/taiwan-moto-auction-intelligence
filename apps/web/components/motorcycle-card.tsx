@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Badge, Card } from "@tm-ai/ui";
 import { ArrowUpRight, CalendarDays, Camera, Gauge, KeyRound, MapPin, Power, ShieldCheck } from "lucide-react";
 import { formatMoney, isEndedAuction, type Motorcycle } from "@tm-ai/shared";
-import { disposalOriginLabels, eligibilityLabels, fourStateLabels, registrationLabels } from "@/lib/labels";
+import { disposalOriginLabels, eligibilityLabels, fourStateLabels, motorcycleClassLabels, registrationLabels } from "@/lib/labels";
 import { FavoriteButton } from "./favorite-button";
 import { PhotoGallery } from "./photo-gallery";
 
@@ -42,8 +42,10 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
   const deadline = timeline(motorcycle);
   const eligibilityTone = motorcycle.bidEligibility === "LICENSED_RECYCLER_ONLY" ? "danger" : motorcycle.bidEligibility === "UNKNOWN" ? "warn" : "good";
   const registrationTone = ["SCRAP_ONLY", "CANNOT_RELICENSE"].includes(motorcycle.registrationStatus) ? "danger" : motorcycle.registrationStatus === "NORMAL_TRANSFER" ? "good" : "warn";
+  const gateLabels = new Set([eligibilityLabels[motorcycle.bidEligibility], registrationLabels[motorcycle.registrationStatus]]);
+  const secondaryRisks = motorcycle.riskBadges.filter((risk) => !gateLabels.has(risk));
 
-  return <Card className="moto-card">
+  return <Card className={`moto-card ${photoCount > 0 ? "has-official-photo" : "no-official-photo"}`}>
     <div className="card-image">
       <PhotoGallery
         images={cachedImages}
@@ -56,7 +58,7 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
         href={href}
         variant="card"
       />
-      <span className={`auction-state ${deadline.urgency}`}>{deadline.label}</span>
+      {photoCount > 0 && <span className={`auction-state ${deadline.urgency}`}>{deadline.label}</span>}
       {photoCount > 0 && <span className="photo-count"><Camera size={14}/>{photoCount} 張官方照片</span>}
       {motorcycle.favoriteSupported && <FavoriteButton id={motorcycle.id} initial={motorcycle.favorite} />}
     </div>
@@ -65,10 +67,11 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
       <h2 className="card-title"><Link href={href}>{motorcycle.name}</Link></h2>
       <p className="agency">{motorcycle.organization}</p>
 
-      <div className="decision-badges" aria-label="投標與領牌判斷">
-        <Badge tone={eligibilityTone}>{eligibilityLabels[motorcycle.bidEligibility]}</Badge>
-        <Badge tone={registrationTone}>{registrationLabels[motorcycle.registrationStatus]}</Badge>
-        {motorcycle.bulkLot && <Badge tone="warn">{motorcycle.lotSize > 1 ? `${motorcycle.lotSize} 臺整批` : "整批標售"}</Badge>}
+      <div className="identity-line"><Badge tone="info">{motorcycleClassLabels[motorcycle.vehicleClass]}</Badge>{motorcycle.bulkLot && <Badge tone="warn">{motorcycle.lotSize > 1 ? `${motorcycle.lotSize} 臺整批` : "整批標售"}</Badge>}</div>
+
+      <div className="purchase-gates" aria-label="投標與領牌判斷">
+        <div className={`gate gate-${eligibilityTone}`}><span>誰能投標</span><strong>{eligibilityLabels[motorcycle.bidEligibility]}</strong></div>
+        <div className={`gate gate-${registrationTone}`}><span>能否上路</span><strong>{registrationLabels[motorcycle.registrationStatus]}</strong></div>
       </div>
 
       <div className="bid-snapshot">
@@ -77,10 +80,10 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
       </div>
 
       <dl className="vehicle-specs">
+        <div><dt>機車級別</dt><dd>{motorcycleClassLabels[motorcycle.vehicleClass]}</dd></div>
         <div><dt>出廠年月</dt><dd>{manufacture}</dd></div>
         <div><dt>排氣量</dt><dd>{motorcycle.displacementCc ? `${motorcycle.displacementCc} c.c.` : "未確認"}</dd></div>
         <div><dt>車牌</dt><dd>{motorcycle.plateNumber ?? "未確認"}</dd></div>
-        <div><dt>標售方式</dt><dd>{motorcycle.bulkLot ? motorcycle.lotSize > 1 ? `${motorcycle.lotSize} 臺整批` : "整批" : "單台"}</dd></div>
       </dl>
 
       <div className="condition-row" aria-label="車況摘要">
@@ -92,10 +95,10 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
         <span>{disposalOriginLabels[motorcycle.disposalOrigin]}</span>
         {motorcycle.location && <span><MapPin size={14}/>{motorcycle.location}</span>}
       </div>
-      <div className="badges risk-list">{motorcycle.riskBadges.slice(0,3).map((risk)=><Badge key={risk} tone="warn">{risk}</Badge>)}</div>
+      <div className="badges risk-list">{secondaryRisks.slice(0,3).map((risk)=><Badge key={risk} tone="warn">{risk}</Badge>)}</div>
       <div className="card-footer">
         <div className="completeness"><span>情報完整度 <strong>{motorcycle.completeness}%</strong></span><span className="meter" aria-hidden="true"><i style={{width:`${motorcycle.completeness}%`}} /></span></div>
-        <Link className="card-cta" href={href}>查看決策資料 <ArrowUpRight size={15}/></Link>
+        <Link className="card-cta" href={href}>看完整車況與證據 <ArrowUpRight size={15}/></Link>
       </div>
     </div>
   </Card>;

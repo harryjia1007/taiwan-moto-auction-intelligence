@@ -2,6 +2,12 @@
 
 官方入口：<https://web.pcc.gov.tw/opas/aspam/public/indexAspam>
 
+## 目前政策：REVIEW_REQUIRED
+
+robots 入口目前沒有提供可直接判讀的政策，而是回到網站頁面。自動存取方式與條款完成書面確認前，adapter 不進無人排程，CLI 會在 discovery 前 fail closed。既有私有 raw artifacts 仍可離線解析；可讀取網頁本身不等同已獲准自動擷取。
+
+## 已實作但暫停的能力
+
 `pcc` adapter 使用公開 GET 查詢的 `searchAssetsName` 欄位，以「機車、汽機車、電動機車、重型機車」發現全國公告；再依結果列的官方主鍵讀取公開明細。搜尋結果中的「電力機車」鐵路車輛會排除。
 
 明細解析機關、案號、公告次數、公告／截止日期、底價、保證金、資格、標的所在地、查看時間與附加說明。重要欄位保存逐字官方證據。投標資格含廢機動車輛回收資格時標為 `LICENSED_RECYCLER_ONLY`。

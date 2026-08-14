@@ -26,6 +26,17 @@ export const REGISTRATION_STATUSES = [
 ] as const;
 export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
 
+export const MOTORCYCLE_CLASSES = [
+  "ORDINARY_LIGHT", "ORDINARY_HEAVY", "LARGE_HEAVY",
+  "ELECTRIC_MOTORCYCLE", "HEAVY_UNSPECIFIED", "UNKNOWN",
+] as const;
+export type MotorcycleClass = (typeof MOTORCYCLE_CLASSES)[number];
+
+export const DISPLACEMENT_BANDS = [
+  "LE_50", "CC_51_125", "CC_126_250", "CC_251_550", "GT_550", "UNKNOWN",
+] as const;
+export type DisplacementBand = (typeof DISPLACEMENT_BANDS)[number];
+
 export const FOUR_STATES = ["YES", "NO", "UNKNOWN", "CONFLICTING"] as const;
 export type FourState = (typeof FOUR_STATES)[number];
 

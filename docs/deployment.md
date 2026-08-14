@@ -1,6 +1,6 @@
 # Deployment Configuration
 
-This slice is deployment-ready but does not provision cloud resources.
+The hosted database foundation is provisioned. The authenticated web deployment and scheduled-ingestion secrets remain gated on the owner email and deployment-provider configuration described below.
 
 ## Local managed server
 
@@ -10,8 +10,12 @@ The production build uses `.next-production`, while development uses `.next`, so
 
 ## Supabase
 
-1. Create a project and link the repository with the Supabase CLI.
-2. Apply migrations and update `app_settings.owner_email` to the same lowercase value as `OWNER_EMAIL`.
+The dedicated hosted project `taiwan-moto-auction` was created in `ap-southeast-1` on 2026-08-15 with project ref `hdxlhxqlkdipqkwisjyd`. All committed migrations through `202608150004_public_live_listing_feed` are applied. Production seeding intentionally loaded only organizations, sources, access policies, endpoints and aliases; real Shwoo records are added by the scheduled publisher. Hosted verification reports a private `raw-artifacts` bucket, RLS on every public table, anonymous SELECT access only to the sanitized live-listing projection, and no anonymous access to operational tables.
+
+Run `pnpm run doctor` before bootstrapping. The Supabase CLI packages PostgreSQL, Auth, Storage, local email, and the pgTAP runner as a Docker-compatible local stack; installing the JavaScript CLI alone does not create those services. Docker Desktop is the default, while OrbStack, Podman, and Colima are documented compatible alternatives.
+
+1. Link the repository to project ref `hdxlhxqlkdipqkwisjyd` when CLI access is configured.
+2. Update `app_settings.owner_email` to the same lowercase value as `OWNER_EMAIL` before enabling login.
 3. Keep the `raw-artifacts` bucket private.
 4. Add the production callback URL to Auth redirect URLs.
 
@@ -21,4 +25,14 @@ Use `apps/web` through the root `vercel.json`. Configure `NEXT_PUBLIC_SUPABASE_U
 
 ## GitHub Actions
 
-Scheduled ingestion requires encrypted `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` secrets. The workflow runs four times per day and never logs into or bids on the source site.
+Scheduled public ingestion requires encrypted `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` secrets. The workflow runs the Shwoo publisher four times per day, preserving raw artifacts privately before updating the public projection. Judicial discovery is disabled because the current robots policy disallows automated paths. MOJ, Administrative Enforcement and Government e-Procurement remain outside the unattended public schedule until their documented discovery/authorization conditions are satisfied. The workflow never logs into or bids on a source site.
+
+Administrative Enforcement is intentionally excluded from unattended schedules because the official discovery form requires a human-completed CAPTCHA. After a human performs the official `汽機車` search, save the validated detail URLs in the ignored `.data/moj-enforcement-manifest.json` file and run `pnpm ingest:moj-enforcement`. This imports only official detail pages and attachments; it does not read, submit, reuse, or bypass the CAPTCHA.
+
+The source dashboard must retain truthful readiness states. `PARTIAL` means the adapter is usable under its documented limits, not that nationwide discovery is complete. Only promote a source to `ACTIVE` after a successful real database sync, raw-artifact persistence, and an operator review of source metrics.
+
+## Public portfolio boundary
+
+The portfolio page at `harryjia.com/projects/taiwan-moto-auction` reads only `public_live_motorcycle_listings` with a publishable key. Operational tables, `/motorcycles`, `/sources`, private APIs, cached artifacts, evidence and full snapshots remain owner-only. Public cards link to the publisher's official page and load only official source-image URLs; they never receive private Storage paths or a service-role key.
+
+The separate `database-tests.yml` workflow needs no project secrets. It starts an isolated Supabase stack on the GitHub runner, replays every migration and the seed, runs the committed pgTAP suite, reports status on failure, and always stops the stack. Seed assertions address the fixed sanitized seed identifiers instead of global row counts, so `pnpm db:test` remains valid after live ingestion adds records. This supplements local testing; it does not deploy or create a hosted Supabase project.

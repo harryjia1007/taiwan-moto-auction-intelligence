@@ -23,18 +23,20 @@ function PhotoAbsence({
   plateNumber,
   sourceAuid,
   mediaNote,
-}: Omit<PhotoGalleryProps, "images" | "name" | "href" | "variant"> & { failed: boolean }) {
+  variant,
+}: Omit<PhotoGalleryProps, "images" | "name" | "href"> & { failed: boolean }) {
   const judicialCopy = "法院公告目前沒有可辨識的車輛影像";
   const defaultCopy = "官方來源頁未提供可供本站快取的車輛照片";
+  const copy = failed ? "照片記錄存在，但簽名連結或快取目前無法讀取。" : mediaNote ?? (source === "judicial" ? judicialCopy : defaultCopy);
 
-  return <div className={`photo-absence ${failed ? "photo-unavailable" : ""}`} role="img" aria-label={failed ? "官方照片暫時無法載入" : "官方未提供照片"}>
-    <span>{failed ? "PHOTO CACHE UNAVAILABLE" : "NO ATTACHMENT"}</span>
+  return <div className={`photo-absence photo-absence-${variant} ${failed ? "photo-unavailable" : ""}`} role="img" aria-label={failed ? "官方照片暫時無法載入" : "官方未提供照片"}>
+    <span>{failed ? "官方影像暫時無法讀取" : "官方未附照片"}</span>
     <strong>{failed ? "官方照片暫時無法載入" : "官方未提供照片"}</strong>
-    <small>{failed ? "照片記錄存在，但簽名連結或快取目前無法讀取。" : mediaNote ?? (source === "judicial" ? judicialCopy : defaultCopy)}</small>
-    <dl>
+    <small>{copy}</small>
+    {variant === "detail" && <dl>
       <div><dt>來源</dt><dd>{organization}</dd></div>
       <div><dt>{plateNumber ? "車牌" : "來源編號"}</dt><dd>{plateNumber ?? sourceAuid}</dd></div>
-    </dl>
+    </dl>}
   </div>;
 }
 
@@ -64,6 +66,7 @@ export function PhotoGallery(props: PhotoGalleryProps) {
       plateNumber={props.plateNumber}
       sourceAuid={props.sourceAuid}
       mediaNote={props.mediaNote}
+      variant={props.variant}
     />;
   }
 

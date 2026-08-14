@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ADAPTER_STATUSES, AUCTION_STATUSES, calculateCompleteness, FOUR_STATES, isEndedAuction, quickSummary, sortMotorcycles, type Motorcycle } from "../src";
+import { ADAPTER_STATUSES, AUCTION_STATUSES, calculateCompleteness, FOUR_STATES, isEndedAuction, MOTORCYCLE_CLASSES, quickSummary, sortMotorcycles, type Motorcycle } from "../src";
 
 const base = {
   id: "1", source: "shwoo", sourceName: "臺北惜物網", sourceFamily: "SHWOO", favoriteSupported: true,
   sourceRecordId: "sr1", sourceAuid: "939528", officialUrl: "https://example.test", officialTitle: "機器腳踏車1台",
-  name: "SYM HM12VB", brand: "SYM", model: "HM12VB", manufactureYear: 2011, manufactureMonth: 5, displacementCc: 125, plateNumber: "367-JSJ", color: "黃色",
+  name: "SYM HM12VB", brand: "SYM", model: "HM12VB", manufactureYear: 2011, manufactureMonth: 5, displacementCc: 125, vehicleClass: "ORDINARY_HEAVY", plateNumber: "367-JSJ", color: "黃色",
   organization: "台灣電力股份有限公司台南區營業處", location: "臺南市永康區", county: "臺南市", disposalOrigin: "PUBLIC_ASSET_DISPOSAL",
   auctionStatus: "SCHEDULED", auctionRound: 1, auctionAt: "2026-08-12T04:00:00Z", reservePrice: 2000, currentPrice: 4300, soldPrice: null,
   deposit: null, paymentDeadline: null, pickupDeadline: null, feeNotes: [],
@@ -37,8 +37,8 @@ describe("calculateCompleteness", () => {
 
 describe("shared enum serialization", () => {
   it("keeps database/API wire values stable", () => {
-    expect(JSON.parse(JSON.stringify({ status: AUCTION_STATUSES[2], fact: FOUR_STATES[3], adapter: ADAPTER_STATUSES[0] })))
-      .toEqual({ status: "SCHEDULED", fact: "CONFLICTING", adapter: "PLANNED" });
+    expect(JSON.parse(JSON.stringify({ status: AUCTION_STATUSES[2], fact: FOUR_STATES[3], adapter: ADAPTER_STATUSES[0], vehicleClass: MOTORCYCLE_CLASSES[1] })))
+      .toEqual({ status: "SCHEDULED", fact: "CONFLICTING", adapter: "PLANNED", vehicleClass: "ORDINARY_HEAVY" });
   });
 });
 

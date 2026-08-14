@@ -13,8 +13,8 @@ def test_search_results_discover_road_motorcycles_and_exclude_locomotives() -> N
         (FIXTURES / "pcc_search.html").read_bytes(),
         PccAssetSaleAdapter.SEARCH_URL,
     )
-    assert [item.source_record_id for item in items] == ["70020198", "70020257"]
-    assert str(items[0].official_url).endswith("readOneAspamDetailOld?pk=70020198")
+    assert [item.source_record_id for item in items] == ["99900001", "99900002"]
+    assert str(items[0].official_url).endswith("readOneAspamDetailOld?pk=99900001")
 
 
 @pytest.mark.asyncio

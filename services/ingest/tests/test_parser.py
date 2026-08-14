@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from ingest.models import BidEligibility, DiscoveredItem, FourState, RawArtifact, RegistrationStatus
-from ingest.parser import parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime
+from ingest.models import BidEligibility, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass
+from ingest.parser import motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -48,12 +48,28 @@ def test_judicial_compact_roc_date_conversion() -> None:
     assert (value.year, value.month, value.day) == (2026, 8, 19)
 
 
+@pytest.mark.parametrize(
+    ("official_text", "expected"),
+    [
+        ("普通輕型機車一輛", VehicleClass.ORDINARY_LIGHT),
+        ("普通重型機車一輛", VehicleClass.ORDINARY_HEAVY),
+        ("大型重型機車一輛", VehicleClass.LARGE_HEAVY),
+        ("大型重機一部", VehicleClass.LARGE_HEAVY),
+        ("電動機車一輛", VehicleClass.ELECTRIC_MOTORCYCLE),
+        ("重型機車一輛", VehicleClass.HEAVY_UNSPECIFIED),
+        ("排氣量 124cc 機車一輛", VehicleClass.UNKNOWN),
+    ],
+)
+def test_motorcycle_class_requires_explicit_official_wording(official_text: str, expected: VehicleClass) -> None:
+    assert motorcycle_class_from_official_text(official_text)[0] == expected
+
+
 def test_judicial_structured_record_preserves_unknown_price_and_exact_identity() -> None:
     content = (FIXTURES / "judicial_motorcycle.json").read_bytes()
     judicial_item = DiscoveredItem(
-        source_record_id="852659",
-        official_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm?filenm=TPD_114_201863_1.pdf",
-        title="「511-KND」普通重型機車",
+        source_record_id="TEST-ROW-001",
+        official_url="https://www.judicial.gov.tw/tw/lp-85-1.html",
+        title="合成普通重型機車",
         discovery_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm",
     )
     source = RawArtifact(
@@ -66,7 +82,7 @@ def test_judicial_structured_record_preserves_unknown_price_and_exact_identity()
     )
     record = parse_judicial_record(judicial_item, source)
     assert record.organization == "臺灣臺北地方法院"
-    assert record.official_case_number == "114司執字第201863號"
+    assert record.official_case_number == "115司執字第000001號（合成測試）"
     assert record.auction_round == 1
     assert record.reserve_price is None
     assert record.brand == "YAMAHA"
@@ -128,7 +144,7 @@ def test_bulk_listing_creates_separable_vehicle_units() -> None:
     assert record.bulk_lot is True
     assert record.eligibility == BidEligibility.LICENSED_RECYCLER_ONLY
     assert len(record.vehicle_units) == 7
-    assert record.vehicle_units[0].identifiers[0].normalized_value == "100NKP"
+    assert record.vehicle_units[0].identifiers[0].normalized_value == "TST1001"
 
 
 def test_conflicting_official_statements_are_not_silently_resolved() -> None:

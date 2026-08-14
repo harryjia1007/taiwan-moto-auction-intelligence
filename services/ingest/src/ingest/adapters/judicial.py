@@ -11,7 +11,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.adapters.base import SourceAdapter
+from ingest.adapters.base import SourceAdapter, contact_user_agent, enforce_http_status
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SourceHealth
 from ingest.parser import parse_judicial_record
 
@@ -27,16 +27,25 @@ class JudicialMovableAdapter(SourceAdapter):
     QUERY_URL = f"{BASE_URL}/QUERY.htm"
     PDF_URL = f"{BASE_URL}/DO_VIEWPDF.htm"
     ALLOWED_HOSTS = {"aomp109.judicial.gov.tw"}
-    KEYWORDS = ("機車", "機器腳踏車", "電動機車")
+    KEYWORDS = (
+        "機車", "機器腳踏車", "普通輕型機車", "普通重型機車",
+        "大型重型機車", "重型機車", "重機", "電動機車",
+    )
     MAX_BYTES = 25 * 1024 * 1024
     PAGE_SIZE = 100
     MAX_PAGES_PER_KEYWORD = 10
 
-    def __init__(self, client: httpx.AsyncClient | None = None, request_interval: float = 1.0) -> None:
+    def __init__(
+        self,
+        manual_items: list[DiscoveredItem] | None = None,
+        client: httpx.AsyncClient | None = None,
+        request_interval: float = 1.0,
+    ) -> None:
+        self.manual_items = manual_items or []
         self.client = client or httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(25),
-            headers={"User-Agent": "TaiwanMotoAuctionIntelligence/0.3 (+personal read-only research)"},
+            headers={"User-Agent": contact_user_agent("0.4")},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
@@ -63,7 +72,7 @@ class JudicialMovableAdapter(SourceAdapter):
                 try:
                     response = await self.client.request(method, url, **kwargs)
                     self._last_request = time.monotonic()
-                    response.raise_for_status()
+                    enforce_http_status(response)
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response
@@ -131,6 +140,13 @@ class JudicialMovableAdapter(SourceAdapter):
         return fallback
 
     async def discover(self) -> list[DiscoveredItem]:
+        if self.manual_items:
+            for item in self.manual_items:
+                self._validate_url(str(item.official_url))
+                parsed = urlparse(str(item.official_url))
+                if parsed.path != "/judbp/wkw/WHD1A02/DO_VIEWPDF.htm":
+                    raise ValueError("Judicial manifest must contain an official DO_VIEWPDF URL")
+            return sorted(self.manual_items, key=lambda item: item.source_record_id)
         base_fields = await self._form_fields()
         found: dict[str, DiscoveredItem] = {}
         for keyword in self.KEYWORDS:
@@ -174,6 +190,11 @@ class JudicialMovableAdapter(SourceAdapter):
             http_headers={"x-artifact-provenance": "official-query-result-row"},
             checksum_sha256=hashlib.sha256(record_content).hexdigest(),
         )
+        # Human-supplied manifests intentionally keep the complete document on
+        # the publisher's site. The importer records the official URL and the
+        # transcribed structured row without downloading or mirroring the PDF.
+        if self.manual_items:
+            return [record_artifact]
         response = await self._request("GET", str(item.official_url), headers={"Referer": self.RESULT_FORM_URL})
         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/pdf" or not response.content.startswith(b"%PDF"):

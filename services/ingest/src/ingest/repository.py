@@ -11,11 +11,14 @@ from psycopg.rows import dict_row
 from ingest import PARSER_VERSION
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SyncResult
 from ingest.storage import ArtifactStorage
+from ingest.source_policy import AccessDecision, policy_for
 
 SOURCE_IDS = {
     "shwoo": "20000000-0000-0000-0000-000000000001",
     "judicial": "20000000-0000-0000-0000-000000000002",
     "pcc": "20000000-0000-0000-0000-000000000004",
+    "moj_auction": "20000000-0000-0000-0000-000000000005",
+    "moj_enforcement": "20000000-0000-0000-0000-000000000003",
 }
 
 
@@ -130,13 +133,13 @@ class DatabaseRepository:
                 cur.execute(
                     """
                     insert into raw_artifacts
-                    (source_record_id,sync_run_id,official_url,fetched_at,http_status,http_headers,mime_type,filename,checksum_sha256,content_length,storage_path,extraction_status,parser_version)
-                    values (%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,'PARSED',%s)
+                    (source_record_id,sync_run_id,official_url,fetched_at,http_status,http_headers,mime_type,filename,checksum_sha256,content_length,storage_path,extraction_status,parser_version,retention_until)
+                    values (%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,'PARSED',%s,%s + interval '12 months')
                     on conflict (checksum_sha256,storage_path) do nothing returning id
                     """,
                     (source_record_uuid, run_id, str(artifact.official_url), artifact.fetched_at, artifact.http_status,
                      _json(artifact.http_headers), artifact.mime_type, artifact.filename, artifact.checksum_sha256,
-                     len(artifact.content), path, PARSER_VERSION),
+                     len(artifact.content), path, PARSER_VERSION, record.ends_at or artifact.fetched_at),
                 )
                 row = cur.fetchone()
                 if row:
@@ -203,12 +206,12 @@ class DatabaseRepository:
             cur.execute(
                 """
                 insert into lots
-                (auction_event_id,lot_number,title,lot_size,bulk_lot,eligibility,storage_location,original_description,fee_notes,
+                (auction_event_id,lot_number,title,lot_size,bulk_lot,eligibility,vehicle_category,storage_location,original_description,fee_notes,
                  registration_status,has_key,can_start,can_test,condition_summary,completeness,completeness_groups)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                 on conflict (auction_event_id,(coalesce(lot_number,''))) do update
                 set title=excluded.title,lot_size=excluded.lot_size,bulk_lot=excluded.bulk_lot,
-                    eligibility=excluded.eligibility,storage_location=excluded.storage_location,
+                    eligibility=excluded.eligibility,vehicle_category=excluded.vehicle_category,storage_location=excluded.storage_location,
                     original_description=excluded.original_description,fee_notes=excluded.fee_notes,
                     registration_status=excluded.registration_status,has_key=excluded.has_key,
                     can_start=excluded.can_start,can_test=excluded.can_test,
@@ -216,7 +219,7 @@ class DatabaseRepository:
                     completeness_groups=excluded.completeness_groups
                 returning id
                 """,
-                (event_id, "1", record.title, record.lot_size, record.bulk_lot, record.eligibility.value,
+                (event_id, "1", record.title, record.lot_size, record.bulk_lot, record.eligibility.value, record.vehicle_class.value,
                  record.location, record.description, record.fee_notes, record.registration_status.value,
                  record.has_key.value, record.can_start.value, record.can_test.value,
                  record.condition_summary, record.completeness, _json(record.completeness_groups)),
@@ -266,13 +269,13 @@ class DatabaseRepository:
             cur.execute(
                 """
                 insert into vehicles
-                (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,manufacture_year,manufacture_month,
+                (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_category,manufacture_year,manufacture_month,
                  displacement_cc,color,mileage_km,has_key,can_start,can_test,registration_status,condition_summary,visible_damage,
                  tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                 on conflict (lot_id,source_vehicle_key) do update set
                  brand_id=excluded.brand_id,model_id=excluded.model_id,original_brand=excluded.original_brand,original_model=excluded.original_model,
-                 manufacture_year=excluded.manufacture_year,manufacture_month=excluded.manufacture_month,displacement_cc=excluded.displacement_cc,
+                 vehicle_category=excluded.vehicle_category,manufacture_year=excluded.manufacture_year,manufacture_month=excluded.manufacture_month,displacement_cc=excluded.displacement_cc,
                  color=excluded.color,mileage_km=excluded.mileage_km,has_key=excluded.has_key,can_start=excluded.can_start,can_test=excluded.can_test,
                  registration_status=excluded.registration_status,condition_summary=excluded.condition_summary,visible_damage=excluded.visible_damage,
                  tax_arrears=excluded.tax_arrears,fine_arrears=excluded.fine_arrears,fuel_fee_arrears=excluded.fuel_fee_arrears,
@@ -280,13 +283,14 @@ class DatabaseRepository:
                 returning id
                 """,
                 (lot_id, record.vehicle_units[0].source_vehicle_key if record.vehicle_units else "primary",
-                 brand_id, model_id, record.brand, record.model, record.model, record.manufacture_year, record.manufacture_month,
+                 brand_id, model_id, record.brand, record.model, record.model, record.vehicle_class.value, record.manufacture_year, record.manufacture_month,
                  record.displacement_cc, record.color, record.mileage_km, record.has_key.value, record.can_start.value, record.can_test.value,
                  record.registration_status.value, record.condition_summary, record.visible_damage, record.tax_arrears.value,
                  record.fine_arrears.value, record.fuel_fee_arrears.value, record.completeness, _json(record.completeness_groups)),
             )
             vehicle_id = cur.fetchone()["id"]
-            for identifier in record.identifiers:
+            primary_identifiers = record.vehicle_units[0].identifiers if record.vehicle_units else record.identifiers
+            for identifier in primary_identifiers:
                 cur.execute(
                     """insert into vehicle_identifiers (vehicle_id,identifier_type,normalized_value,original_value)
                        values (%s,%s,%s,%s) on conflict (vehicle_id,identifier_type,normalized_value)
@@ -297,13 +301,13 @@ class DatabaseRepository:
                 cur.execute(
                     """
                     insert into vehicles
-                    (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,manufacture_year,manufacture_month,
+                    (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_category,manufacture_year,manufacture_month,
                      displacement_cc,color,mileage_km,has_key,can_start,can_test,registration_status,condition_summary,visible_damage,
                      tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups)
-                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                     on conflict (lot_id,source_vehicle_key) do update set updated_at=now() returning id
                     """,
-                    (lot_id, unit.source_vehicle_key, brand_id, model_id, record.brand, record.model, record.model,
+                    (lot_id, unit.source_vehicle_key, brand_id, model_id, record.brand, record.model, record.model, record.vehicle_class.value,
                      record.manufacture_year, record.manufacture_month, record.displacement_cc, record.color, record.mileage_km,
                      record.has_key.value, record.can_start.value, record.can_test.value, record.registration_status.value,
                      record.condition_summary, record.visible_damage, record.tax_arrears.value, record.fine_arrears.value,
@@ -348,6 +352,33 @@ class DatabaseRepository:
                 )
             return changed or bool(source_row["inserted"])
 
+    async def purge_expired_artifacts(self, *, execute: bool = False) -> list[dict[str, Any]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select ra.id,ra.storage_path,ra.checksum_sha256,ra.retention_until
+                from raw_artifacts ra
+                join source_records sr on sr.id=ra.source_record_id
+                left join artifact_tombstones at on at.artifact_id=ra.id
+                where sr.source_id=%s and ra.retention_until <= now() and at.id is null
+                order by ra.retention_until,ra.id
+                """,
+                (self.source_id,),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        if not execute:
+            return rows
+        for row in rows:
+            await self.storage.delete(row["storage_path"])
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """insert into artifact_tombstones (artifact_id,storage_path,checksum_sha256,reason)
+                       values (%s,%s,%s,'12-month private artifact retention expired')
+                       on conflict (artifact_id) do nothing""",
+                    (row["id"], row["storage_path"], row["checksum_sha256"]),
+                )
+        return rows
+
     def finish_run(self, run_id: str, result: SyncResult) -> None:
         status = "FAILED" if result.parsed == 0 and result.failed > 0 else "PARTIAL" if result.discovered == 0 or result.failed else "SUCCEEDED"
         with self._connect() as conn, conn.cursor() as cur:
@@ -356,7 +387,16 @@ class DatabaseRepository:
                    changed_count=%s,parsed_count=%s,failed_count=%s,warnings=%s::jsonb where id=%s""",
                 (status, result.discovered, result.fetched, result.changed, result.parsed, result.failed, _json(result.warnings), run_id),
             )
-            if status == "SUCCEEDED":
+            access = policy_for(self.source).decision
+            if access == AccessDecision.DISABLED:
+                cur.execute("update sources set status='DISABLED' where id=%s", (self.source_id,))
+            elif access == AccessDecision.REVIEW_REQUIRED:
+                cur.execute("update sources set status='DEGRADED' where id=%s", (self.source_id,))
+            elif status == "SUCCEEDED" and self.source != "moj_enforcement":
                 cur.execute("update sources set status='ACTIVE',last_successful_at=now() where id=%s", (self.source_id,))
+            elif status == "SUCCEEDED":
+                cur.execute("update sources set status='PARTIAL',last_successful_at=now() where id=%s", (self.source_id,))
+            elif status == "PARTIAL":
+                cur.execute("update sources set status='PARTIAL' where id=%s", (self.source_id,))
             elif status == "FAILED":
                 cur.execute("update sources set status='DEGRADED' where id=%s", (self.source_id,))

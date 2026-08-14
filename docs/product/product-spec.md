@@ -12,8 +12,12 @@ A private, one-person dashboard answers what a motorcycle is, why it is sold, wh
 4. Separate facts from interpretations and system calculations.
 5. Favor conservative identity resolution over record count.
 
-## Current production slice
+## Current private production slice and public Demo
 
-Taipei Shwoo has the complete photo-preserving vertical slice. Judicial Yuan central movable-property discovery across 22 district courts and nationwide Government e-Procurement asset-sale discovery are implemented as `PARTIAL` until their first successful database-backed live sync. Enforcement, prosecutors, direct police/traffic pages, Customs, and paid vehicle-registry enrichment remain explicitly `PLANNED`.
+Taipei Shwoo has the complete photo-preserving vertical slice and the MOJ centralized portal has an authorized private adapter. Judicial live discovery is `DISABLED` by current robots policy and Government e-Procurement is `REVIEW_REQUIRED`; neither may run unattended. Administrative Enforcement detail, attachment, and photo ingestion is `MANUAL_ONLY` because official discovery requires CAPTCHA. Direct police/traffic pages and Customs remain `PLANNED`; paid vehicle-registry data is a separate manual enrichment workflow rather than an auction source.
+
+`/demo` is an independent public portfolio surface. It contains only synthetic cases and project-owned illustrative visuals, has no Supabase or official-source dependency, and never exposes official attachment deep links. `/motorcycles`, `/sources`, their APIs, favorites, evidence and signed media remain owner-only.
+
+The owner selected a private-only product scope. Ordinary light, ordinary heavy, large heavy, and electric motorcycles are included. Official wording that says only “heavy motorcycle” remains `HEAVY_UNSPECIFIED`; displacement alone is never used to invent a class. Scrap-only and licensed-recycler records remain preserved but are excluded from every normal marketplace view and appear only in the dedicated scrap/recycler area.
 
 The application is read-only with respect to auction sources: it never logs in, bids, or circumvents restrictions. Favorites are the only user mutation.

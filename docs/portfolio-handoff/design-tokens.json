@@ -1,0 +1,18 @@
+{
+  "color": {
+    "canvas": "#f4f0e7",
+    "surface": "#fbf9f4",
+    "ink": "#17231f",
+    "muted": "#66716c",
+    "forest": "#1f5b49",
+    "copper": "#a65a32",
+    "line": "#d8d0c0"
+  },
+  "typography": {
+    "display": "system serif with Traditional Chinese fallback",
+    "body": "system sans-serif with Traditional Chinese fallback",
+    "labelTracking": "0.08em"
+  },
+  "radius": { "small": "8px", "medium": "16px", "large": "28px" },
+  "spacing": { "unit": "4px", "contentMax": "1180px" }
+}

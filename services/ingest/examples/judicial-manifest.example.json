@@ -1,0 +1,23 @@
+[
+  {
+    "source_record_id": "synthetic-example-only",
+    "official_url": "https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm?filenm=%2Fexample%2Fsynthetic.pdf",
+    "crtnm": "合成地方法院",
+    "crm": "115司執字第000001號（合成範例）",
+    "crmyy": "115",
+    "crmid": "司執",
+    "crmno": "000001",
+    "saledate": "1151231",
+    "saleno": "1",
+    "dpt": "測試股",
+    "ttitle": "合成普通重型機車",
+    "registeno": "合成普通重型機車",
+    "qty": "1",
+    "unit": "輛",
+    "notes": "合成測試資料；未包含任何真實案件或車牌。",
+    "sumprice": 0,
+    "saleamt": 0,
+    "crtid": "TST",
+    "pic_cnt": 0
+  }
+]

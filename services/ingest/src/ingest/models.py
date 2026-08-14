@@ -36,6 +36,15 @@ class RegistrationStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class VehicleClass(StrEnum):
+    ORDINARY_LIGHT = "ORDINARY_LIGHT"
+    ORDINARY_HEAVY = "ORDINARY_HEAVY"
+    LARGE_HEAVY = "LARGE_HEAVY"
+    ELECTRIC_MOTORCYCLE = "ELECTRIC_MOTORCYCLE"
+    HEAVY_UNSPECIFIED = "HEAVY_UNSPECIFIED"
+    UNKNOWN = "UNKNOWN"
+
+
 class AuctionStatus(StrEnum):
     DISCOVERED = "DISCOVERED"
     ANNOUNCED = "ANNOUNCED"
@@ -119,6 +128,7 @@ class ParsedAuctionRecord(BaseModel):
     manufacture_year: int | None = None
     manufacture_month: int | None = None
     displacement_cc: int | None = None
+    vehicle_class: VehicleClass = VehicleClass.UNKNOWN
     color: str | None = None
     mileage_km: int | None = None
     has_key: FourState = FourState.UNKNOWN

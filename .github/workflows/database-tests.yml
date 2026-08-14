@@ -1,0 +1,38 @@
+name: Database migrations and pgTAP
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "supabase/**"
+      - ".github/workflows/database-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "supabase/**"
+      - ".github/workflows/database-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.112.0
+      - name: Start isolated Supabase stack and apply migrations
+        run: supabase start
+      - name: Replay migrations and seed from a clean database
+        run: supabase db reset
+      - name: Run pgTAP schema, RLS, history, and semantics tests
+        run: supabase test db
+      - name: Show service status on failure
+        if: failure()
+        run: supabase status
+      - name: Stop local stack
+        if: always()
+        run: supabase stop --no-backup

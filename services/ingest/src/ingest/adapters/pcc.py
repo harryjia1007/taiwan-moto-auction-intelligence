@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.adapters.base import SourceAdapter
+from ingest.adapters.base import SourceAdapter, contact_user_agent, enforce_http_status
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SourceHealth
 from ingest.parser import parse_pcc_detail
 
@@ -23,7 +23,10 @@ class PccAssetSaleAdapter(SourceAdapter):
     SEARCH_URL = f"{BASE_URL}/opas/aspam/public/readAspam"
     INDEX_URL = f"{BASE_URL}/opas/aspam/public/indexAspam"
     ALLOWED_HOSTS = {"web.pcc.gov.tw"}
-    KEYWORDS = ("機車", "汽機車", "電動機車", "重型機車")
+    KEYWORDS = (
+        "機車", "汽機車", "機器腳踏車", "普通輕型機車",
+        "普通重型機車", "大型重型機車", "重型機車", "重機", "電動機車",
+    )
     MAX_BYTES = 25 * 1024 * 1024
     MAX_PAGES_PER_KEYWORD = 20
     DETAIL_ROUTES = {
@@ -36,7 +39,7 @@ class PccAssetSaleAdapter(SourceAdapter):
         self.client = client or httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(20),
-            headers={"User-Agent": "TaiwanMotoAuctionIntelligence/0.2 (+personal read-only research)"},
+            headers={"User-Agent": contact_user_agent("0.4")},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
@@ -63,7 +66,7 @@ class PccAssetSaleAdapter(SourceAdapter):
                 try:
                     response = await self.client.request(method, url, **kwargs)
                     self._last_request = time.monotonic()
-                    response.raise_for_status()
+                    enforce_http_status(response)
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response

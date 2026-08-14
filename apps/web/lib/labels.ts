@@ -1,4 +1,4 @@
-import type { BidEligibility, DisposalOrigin, FourState, RegistrationStatus } from "@tm-ai/shared";
+import type { BidEligibility, DisposalOrigin, FourState, MotorcycleClass, RegistrationStatus } from "@tm-ai/shared";
 
 export const eligibilityLabels: Record<BidEligibility, string> = {
   PUBLIC: "公開投標", NATURAL_PERSON_ALLOWED: "一般民眾可投標", BUSINESS_ONLY: "限公司／商號",
@@ -8,6 +8,14 @@ export const registrationLabels: Record<RegistrationStatus, string> = {
   NORMAL_TRANSFER: "可正常過戶", RE_REGISTRATION_REQUIRED: "需重新領牌", INSPECTION_REQUIRED: "需檢驗／認證",
   REGISTRABILITY_UNKNOWN: "可否領牌未確認", DEREGISTERED: "已繳銷", CANNOT_RELICENSE: "不得重新領牌",
   SCRAP_ONLY: "僅供報廢", EXPORT_ONLY: "僅供出口", UNKNOWN: "牌照狀態未確認",
+};
+export const motorcycleClassLabels: Record<MotorcycleClass, string> = {
+  ORDINARY_LIGHT: "普通輕型機車",
+  ORDINARY_HEAVY: "普通重型機車",
+  LARGE_HEAVY: "大型重型機車",
+  ELECTRIC_MOTORCYCLE: "電動機車",
+  HEAVY_UNSPECIFIED: "重型機車（級別未明）",
+  UNKNOWN: "機車級別未確認",
 };
 export const fourStateLabels: Record<FourState, string> = { YES: "有／可", NO: "無／不可", UNKNOWN: "未確認", CONFLICTING: "官方資料衝突" };
 export const disposalOriginLabels: Record<DisposalOrigin, string> = {

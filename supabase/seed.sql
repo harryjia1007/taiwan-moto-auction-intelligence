@@ -49,21 +49,38 @@ end $$;
 insert into sources (id, organization_id, family, name, adapter_name, status, automation_level, official_url, parser_version)
 values
   ('20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001','SHWOO','臺北惜物網','shwoo','PARTIAL','PUBLIC_READ_ONLY','https://shwoo.gov.taipei/shwoo/browse/browse00/','1.1.0'),
-  ('20000000-0000-0000-0000-000000000002',null,'JUDICIAL','司法院 22 地院動產法拍','judicial','PARTIAL','PUBLIC_READ_ONLY','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm','1.2.0'),
-  ('20000000-0000-0000-0000-000000000003',null,'ADMINISTRATIVE_ENFORCEMENT','行政執行署拍賣','moj_enforcement','PLANNED','CAPTCHA_SAFE_PARTIAL','https://www.tpk.moj.gov.tw/',''),
-  ('20000000-0000-0000-0000-000000000004',null,'PROCUREMENT','政府電子採購網財物變賣','pcc','PARTIAL','PUBLIC_READ_ONLY','https://web.pcc.gov.tw/opas/aspam/public/indexAspam','1.2.0'),
-  ('20000000-0000-0000-0000-000000000005',null,'PROSECUTORS','地方檢察署公告','moj_cms','PLANNED','PLANNED','https://www.moj.gov.tw/',''),
+  ('20000000-0000-0000-0000-000000000002',null,'JUDICIAL','司法院 22 地院動產法拍','judicial','PARTIAL','HUMAN_OFFICIAL_MANIFEST','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm','1.3.0'),
+  ('20000000-0000-0000-0000-000000000003',null,'ADMINISTRATIVE_ENFORCEMENT','行政執行署動產拍賣','moj_enforcement','PARTIAL','CAPTCHA_SAFE_MANUAL','https://www.tpkonsale.moj.gov.tw/Chattel','1.3.0'),
+  ('20000000-0000-0000-0000-000000000004',null,'PROCUREMENT','政府電子採購網財物變賣','pcc','DEGRADED','LEGAL_REVIEW_REQUIRED','https://web.pcc.gov.tw/opas/aspam/public/indexAspam','1.2.0'),
+  ('20000000-0000-0000-0000-000000000005',null,'PROSECUTORS','法務部查扣物集中拍賣','moj_auction','PARTIAL','PUBLIC_READ_ONLY','https://auction.moj.gov.tw/1724/1726/searchList','1.3.0'),
   ('20000000-0000-0000-0000-000000000006',null,'POLICE_TRAFFIC','警政與交通機關','police','PLANNED','PLANNED','https://www.npa.gov.tw/',''),
   ('20000000-0000-0000-0000-000000000007',null,'CUSTOMS','海關拍賣','customs','PLANNED','PLANNED','https://web.customs.gov.tw/','')
 on conflict (name) do nothing;
+
+insert into source_access_policies
+  (source_id,decision,robots_url,terms_url,photo_rights,personal_data_risk,checked_on,rationale)
+values
+  ('20000000-0000-0000-0000-000000000001','ALLOW','https://shwoo.gov.taipei/robots.txt','https://shwoo.gov.taipei/shwoo/newhome/newhome00/index','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-15','/shwoo/ application path is allowed; public redistribution is not enabled'),
+  ('20000000-0000-0000-0000-000000000002','MANUAL_ONLY','https://aomp109.judicial.gov.tw/robots.txt','https://www.judicial.gov.tw/tw/cp-1327-84674-d8e05-1.html','OGL_V1_WITH_EXCEPTIONS','HIGH','2026-08-15','Central query automation is disallowed. Human-reviewed official PDF manifests may be imported without querying or mirroring the blocked site; former dataset 49107 was permanently withdrawn and unattended discovery awaits a replacement official feed'),
+  ('20000000-0000-0000-0000-000000000003','MANUAL_ONLY','https://www.tpkonsale.moj.gov.tw/','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-15','Human CAPTCHA discovery only; validated detail manifests may be processed'),
+  ('20000000-0000-0000-0000-000000000004','REVIEW_REQUIRED','https://web.pcc.gov.tw/robots.txt','https://web.pcc.gov.tw/pis/prac/declarationClient/right','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-15','Robots endpoint does not publish a usable policy; unattended access paused pending review'),
+  ('20000000-0000-0000-0000-000000000005','ALLOW','https://auction.moj.gov.tw/robots.txt','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-15','Public portal robots policy does not disallow collection; data remains private')
+on conflict (source_id) do update set
+  decision=excluded.decision,robots_url=excluded.robots_url,terms_url=excluded.terms_url,
+  photo_rights=excluded.photo_rights,personal_data_risk=excluded.personal_data_risk,
+  checked_on=excluded.checked_on,rationale=excluded.rationale,updated_at=now();
 
 insert into source_endpoints (source_id, endpoint_type, url, notes) values
 ('20000000-0000-0000-0000-000000000001','DISCOVERY','https://shwoo.gov.taipei/shwoo/browse/browse00/','公開搜尋表單'),
 ('20000000-0000-0000-0000-000000000001','RESULTS','https://shwoo.gov.taipei/shwoo/newproduct/newproduct00/bidresult','公開近期待決標/決標查詢'),
 ('20000000-0000-0000-0000-000000000002','DISCOVERY','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/V2.htm','22 個地院中央動產拍賣公開查詢'),
 ('20000000-0000-0000-0000-000000000002','DETAIL','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm','法院拍賣公告 PDF'),
+('20000000-0000-0000-0000-000000000003','DISCOVERY','https://www.tpkonsale.moj.gov.tw/Chattel','人工完成 CAPTCHA 後匯出官方案件明細 URL'),
+('20000000-0000-0000-0000-000000000003','DETAIL','https://www.tpkonsale.moj.gov.tw/Detail/Chattel','官方動產案件明細、公告與照片'),
 ('20000000-0000-0000-0000-000000000004','DISCOVERY','https://web.pcc.gov.tw/opas/aspam/public/readAspam','全國財物變賣公開關鍵字查詢'),
-('20000000-0000-0000-0000-000000000004','DETAIL','https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld','公開財物變賣明細')
+('20000000-0000-0000-0000-000000000004','DETAIL','https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld','公開財物變賣明細'),
+('20000000-0000-0000-0000-000000000005','DISCOVERY','https://auction.moj.gov.tw/1724/1726/searchList','法務部查扣物汽機車類公開清單'),
+('20000000-0000-0000-0000-000000000005','DETAIL','https://auction.moj.gov.tw/1724/1726/','法務部查扣物公告與附件')
 on conflict do nothing;
 
 insert into vehicle_brands (id, canonical_name, aliases) values
@@ -76,17 +93,17 @@ insert into vehicle_models (id, brand_id, canonical_name, model_code)
 values ('31000000-0000-0000-0000-000000000001','30000000-0000-0000-0000-000000000001','HM12VB','HM12VB')
 on conflict do nothing;
 
--- Sanitized development record captured from public Shwoo AUID 939528 on 2026-08-09.
+-- Fully synthetic development record. It is not a real Shwoo case.
 insert into organizations (id, canonical_name, organization_type, jurisdiction, official_domain)
-values ('10000000-0000-0000-0000-000000000002','台灣電力股份有限公司台南區營業處','PUBLIC_ENTERPRISE','臺南市','taipower.com.tw')
+values ('10000000-0000-0000-0000-000000000002','合成公營事業機關','PUBLIC_ENTERPRISE','臺南市',null)
 on conflict do nothing;
 
 insert into source_records (id, source_id, source_record_id, official_url, original_title, first_seen_at, last_seen_at, last_content_checksum)
-values ('40000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001','939528','https://shwoo.gov.taipei/shwoo/newproduct/newproduct00/product?AUID=939528','【115Y431240018】機器腳踏車1台','2026-08-09T00:00:00Z','2026-08-09T00:00:00Z','fixture-939528')
+values ('40000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001','SYNTH-SHWOO-01','https://shwoo.gov.taipei/shwoo/browse/browse00/','【合成測試案件 A】機器腳踏車 1 台','2026-08-09T00:00:00Z','2026-08-09T00:00:00Z','fixture-synthetic-01')
 on conflict do nothing;
 
 insert into auction_cases (id, source_id, organization_id, official_case_number, title, disposal_origin)
-values ('50000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000002','115Y431240018','機器腳踏車1台','PUBLIC_ASSET_DISPOSAL')
+values ('50000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000002','SYNTH-CASE-01','合成機器腳踏車 1 台','PUBLIC_ASSET_DISPOSAL')
 on conflict do nothing;
 
 insert into auction_events (id, auction_case_id, source_record_id, round_number, status, starts_at, ends_at, reserve_price, current_price)
@@ -94,25 +111,25 @@ values ('51000000-0000-0000-0000-000000000001','50000000-0000-0000-0000-00000000
 on conflict do nothing;
 
 insert into lots (id, auction_event_id, lot_number, title, lot_size, bulk_lot, eligibility, storage_location, original_description)
-values ('52000000-0000-0000-0000-000000000001','51000000-0000-0000-0000-000000000001','1','機器腳踏車1台',1,false,'NATURAL_PERSON_ALLOWED','臺南市永康區','已繳銷，可再領牌；目前無法發動。')
+values ('52000000-0000-0000-0000-000000000001','51000000-0000-0000-0000-000000000001','1','合成機器腳踏車 1 台',1,false,'NATURAL_PERSON_ALLOWED','臺南市（測試地點）','合成測試：牌照狀態與發動狀態待確認。')
 on conflict do nothing;
 
 insert into vehicles (id, lot_id, brand_id, model_id, original_brand, original_model, model_code, vehicle_category, manufacture_year, manufacture_month, displacement_cc, color, has_key, can_start, can_test, registration_status, condition_summary, visible_damage, tax_arrears, fine_arrears, completeness, completeness_groups)
-values ('53000000-0000-0000-0000-000000000001','52000000-0000-0000-0000-000000000001','30000000-0000-0000-0000-000000000001','31000000-0000-0000-0000-000000000001','三陽牌','HM12VB','HM12VB','普通重型機車',2011,5,125,'黃色','UNKNOWN','NO','YES','RE_REGISTRATION_REQUIRED','目前車子發不動；僅提供靜態功能測試。','排氣管有生鏽痕跡','NO','NO',84,'{"identity":100,"auction":100,"condition":80,"registration":100,"fees":67,"media":100}')
+values ('53000000-0000-0000-0000-000000000001','52000000-0000-0000-0000-000000000001','30000000-0000-0000-0000-000000000001','31000000-0000-0000-0000-000000000001','三陽牌','HM12VB','HM12VB','ORDINARY_HEAVY',2011,5,125,'黃色','UNKNOWN','NO','YES','RE_REGISTRATION_REQUIRED','目前車子發不動；僅提供靜態功能測試。','排氣管有生鏽痕跡','NO','NO',84,'{"identity":100,"auction":100,"condition":80,"registration":100,"fees":67,"media":100}')
 on conflict do nothing;
 
 insert into vehicle_identifiers (vehicle_id, identifier_type, normalized_value, original_value) values
-('53000000-0000-0000-0000-000000000001','PLATE','367-JSJ','367－JSJ'),
-('53000000-0000-0000-0000-000000000001','ENGINE','FD328707','FD328707'),
-('53000000-0000-0000-0000-000000000001','FRAME','RFGHM12VRBS017215','RFGHM12VRBS017215')
+('53000000-0000-0000-0000-000000000001','PLATE','TEST-SHWOO-01','TEST-SHWOO-01'),
+('53000000-0000-0000-0000-000000000001','ENGINE','SYNTH-ENGINE-01','SYNTH-ENGINE-01'),
+('53000000-0000-0000-0000-000000000001','FRAME','SYNTH-FRAME-01','SYNTH-FRAME-01')
 on conflict do nothing;
 
 insert into photos (vehicle_id, source_record_id, source_url, sort_order)
-values ('53000000-0000-0000-0000-000000000001','40000000-0000-0000-0000-000000000001','https://shwoo.gov.taipei/shwoo/image?piccode=20260728504721&width=960&height=720&attach=20260728160842.PNG',0)
+values ('53000000-0000-0000-0000-000000000001','40000000-0000-0000-0000-000000000001','https://shwoo.gov.taipei/shwoo/browse/browse00/',0)
 on conflict do nothing;
 
 insert into field_evidence (entity_type, entity_id, field_name, normalized_value, source_record_id, source_text, parser_name, parser_version, extraction_method, trust, confidence) values
-('vehicle','53000000-0000-0000-0000-000000000001','registration_status','"RE_REGISTRATION_REQUIRED"','40000000-0000-0000-0000-000000000001','已繳銷(可再領牌)','shwoo','1.0.0','HTML','OFFICIAL_EXPLICIT',1),
-('vehicle','53000000-0000-0000-0000-000000000001','can_start','"NO"','40000000-0000-0000-0000-000000000001','目前車子發不動，不確定是否有那一部位機件故障，或電池沒電。','shwoo','1.0.0','HTML','OFFICIAL_EXPLICIT',1),
-('vehicle','53000000-0000-0000-0000-000000000001','can_test','"YES"','40000000-0000-0000-0000-000000000001','僅提供靜態功能測試，無法提供道路行駛測試。','shwoo','1.0.0','HTML','OFFICIAL_EXPLICIT',1)
+('vehicle','53000000-0000-0000-0000-000000000001','registration_status','"RE_REGISTRATION_REQUIRED"','40000000-0000-0000-0000-000000000001','合成測試：牌照已繳銷，領牌條件待確認。','shwoo','1.0.0','HTML','OFFICIAL_EXPLICIT',1),
+('vehicle','53000000-0000-0000-0000-000000000001','can_start','"NO"','40000000-0000-0000-0000-000000000001','合成測試：目前無法發動，原因未確認。','shwoo','1.0.0','HTML','OFFICIAL_EXPLICIT',1),
+('vehicle','53000000-0000-0000-0000-000000000001','can_test','"YES"','40000000-0000-0000-0000-000000000001','合成測試：只允許靜態檢查。','shwoo','1.0.0','HTML','OFFICIAL_EXPLICIT',1)
 on conflict do nothing;
