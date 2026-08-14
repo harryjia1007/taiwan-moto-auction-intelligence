@@ -20,6 +20,11 @@ from ingest.source_policy import AccessDecision, policy_for, require_live_access
 
 app = typer.Typer(no_args_is_help=True, help="Read-only official motorcycle auction ingestion")
 
+PUBLIC_AUTOMATED_SOURCES = {
+    "shwoo": "臺北惜物網",
+    "moj_auction": "法務部查扣物集中拍賣",
+}
+
 
 def exception_message(exc: Exception) -> str:
     """Keep run warnings useful even for exceptions with an empty string form."""
@@ -168,15 +173,26 @@ async def run_sync(source: str, limit: int | None, manifest: Path | None = None)
     typer.echo(result.model_dump_json(indent=2))
 
 
-async def run_publish_public_shwoo(limit: int | None) -> None:
-    require_live_access("shwoo")
+async def run_publish_public(source: str, limit: int | None) -> None:
+    if source not in PUBLIC_AUTOMATED_SOURCES:
+        raise typer.BadParameter(
+            "Automated public publishing is limited to reviewed ALLOW sources: "
+            + ", ".join(PUBLIC_AUTOMATED_SOURCES)
+        )
+    require_live_access(source)
     supabase_url = os.getenv("SUPABASE_URL")
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     if not supabase_url or not service_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
-    adapter = adapter_for("shwoo")
-    publisher = SupabasePublicPublisher(supabase_url, service_key, os.getenv("RAW_ARTIFACT_BUCKET", "raw-artifacts"))
-    result = SyncResult(source="shwoo", discovered=0, fetched=0, parsed=0, changed=0, failed=0)
+    adapter = adapter_for(source)
+    publisher = SupabasePublicPublisher(
+        supabase_url,
+        service_key,
+        os.getenv("RAW_ARTIFACT_BUCKET", "raw-artifacts"),
+        source_adapter=source,
+        source_name=PUBLIC_AUTOMATED_SOURCES[source],
+    )
+    result = SyncResult(source=source, discovered=0, fetched=0, parsed=0, changed=0, failed=0)
     await publisher.start()
     try:
         items = await adapter.discover()
@@ -270,8 +286,17 @@ def sync(
 
 @app.command("publish-public-shwoo")
 def publish_public_shwoo(limit: int | None = typer.Option(None, min=1)) -> None:
-    """Publish the sanitized live Shwoo feed and preserve private raw artifacts."""
-    asyncio.run(run_publish_public_shwoo(limit))
+    """Backward-compatible Shwoo publisher alias."""
+    asyncio.run(run_publish_public("shwoo", limit))
+
+
+@app.command("publish-public")
+def publish_public(
+    source: str = typer.Option(..., help="Reviewed automated source: shwoo or moj_auction"),
+    limit: int | None = typer.Option(None, min=1),
+) -> None:
+    """Preserve private artifacts and publish a sanitized official-source feed."""
+    asyncio.run(run_publish_public(source, limit))
 
 
 @app.command()

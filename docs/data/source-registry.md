@@ -9,7 +9,7 @@ Statuses are `PLANNED`, `PARTIAL`, `ACTIVE`, `DEGRADED`, or `DISABLED`. `ACTIVE`
 | Court asset disposal | District-court public asset disposal notices | REVIEW_REQUIRED | No unattended procurement discovery pending written clarification |
 | Administrative enforcement | 13 branches | PARTIAL | Human completes official CAPTCHA and exports detail URLs; detail, document, and photo ingestion is automated |
 | Government e-Procurement asset sales | Nationwide public organizations | DEGRADED / REVIEW_REQUIRED | Unattended access paused pending written confirmation |
-| Prosecutors / seized property | MOJ centralized portal plus 22 offices | PARTIAL until first DB-backed live sync | Central public vehicle category, announcement, attachment, and photo collection |
+| Prosecutors / seized property | MOJ centralized portal plus 22 offices | PARTIAL until first successful scheduled DB-backed sync | Central public vehicle category, announcement, attachment, and photo collection; scheduled four times daily |
 | Police and traffic | Dynamically discovered | PLANNED | Procurement-first, direct enrichment |
 | Customs | Keelung, Taipei, Taichung, Kaohsiung | PLANNED | Announcement and attachment parsing |
 | Paid vehicle registry enrichment | Owner-authorized per-record enrichment, not discovery coverage | PLANNED (enrichment only) | Manual login and explicit charge confirmation; no motorcycle mileage |

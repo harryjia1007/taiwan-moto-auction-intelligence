@@ -9,3 +9,5 @@ The source represents criminal seizure, forfeiture, or pre-judgment conversion; 
 Some announcements use generic “vehicle” titles and scanned PDF tables. If neither the public list title nor machine-readable official text explicitly identifies a motorcycle, the adapter does not create a vehicle row. The artifact format is documented as a coverage warning for future OCR work; OCR, if added, must remain evidence-linked and non-authoritative until reviewed.
 
 Supported explicit classes are ordinary light, ordinary heavy, large heavy, and electric motorcycle. Generic `重型機車` remains `HEAVY_UNSPECIFIED`.
+
+The hosted scheduler runs this source four times daily after Taipei Shwoo with `python -m ingest publish-public --source moj_auction`. A successful run privately preserves official HTML, attachments and images, records source/run metrics and snapshots, and updates only the sanitized public projection. A zero-result run is retained as an explicit coverage warning and never deletes prior listings.

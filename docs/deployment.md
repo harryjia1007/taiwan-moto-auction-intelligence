@@ -25,7 +25,9 @@ Use `apps/web` through the root `vercel.json`. Configure `NEXT_PUBLIC_SUPABASE_U
 
 ## GitHub Actions
 
-Scheduled public ingestion requires encrypted `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` secrets. The workflow runs the Shwoo publisher four times per day, preserving raw artifacts privately before updating the public projection. Judicial discovery is disabled because the current robots policy disallows automated paths. MOJ, Administrative Enforcement and Government e-Procurement remain outside the unattended public schedule until their documented discovery/authorization conditions are satisfied. The workflow never logs into or bids on a source site.
+Scheduled public ingestion requires encrypted `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` repository secrets. The workflow validates both before making a source request, then runs the Taipei Shwoo and MOJ centralized-auction publishers four times per day. Each publisher preserves raw artifacts privately before updating the public projection. Judicial discovery is disabled because the current robots policy disallows automated paths; Administrative Enforcement remains human-assisted because of CAPTCHA; Government e-Procurement remains paused for authorization review. The workflow never logs into or bids on a source site.
+
+An adapter being healthy does not prove the hosted schedule is operating. Release verification must check the latest GitHub Actions conclusion and confirm a matching `sync_runs` row, nonzero source metrics when official results exist, artifact metadata, snapshots and `last_successful_at`. Missing repository secrets are a deployment blocker, not a source outage.
 
 Administrative Enforcement is intentionally excluded from unattended schedules because the official discovery form requires a human-completed CAPTCHA. After a human performs the official `汽機車` search, save the validated detail URLs in the ignored `.data/moj-enforcement-manifest.json` file and run `pnpm ingest:moj-enforcement`. This imports only official detail pages and attachments; it does not read, submit, reuse, or bypass the CAPTCHA.
 

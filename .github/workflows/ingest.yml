@@ -23,12 +23,28 @@ jobs:
           cache: pip
       - run: pip install -r services/ingest/requirements.lock
       - run: pip install --no-deps services/ingest
-      - name: Check public source
+      - name: Validate hosted ingestion credentials
+        run: |
+          test -n "$SUPABASE_URL" || { echo "Missing SUPABASE_URL repository secret"; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "Missing SUPABASE_SERVICE_ROLE_KEY repository secret"; exit 1; }
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Check Taipei Shwoo
         run: python -m ingest healthcheck --source shwoo
-      - name: Preserve artifacts and publish sanitized live listings
-        run: python -m ingest publish-public-shwoo
+      - name: Publish Taipei Shwoo
+        run: python -m ingest publish-public --source shwoo
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RAW_ARTIFACT_BUCKET: raw-artifacts
           SHWOO_REQUEST_INTERVAL_SECONDS: "1"
+      - name: Check MOJ centralized auction
+        run: python -m ingest healthcheck --source moj_auction
+      - name: Publish MOJ centralized motorcycle auctions
+        run: python -m ingest publish-public --source moj_auction
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RAW_ARTIFACT_BUCKET: raw-artifacts
+          MOJ_AUCTION_REQUEST_INTERVAL_SECONDS: "1"
