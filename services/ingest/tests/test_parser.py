@@ -146,6 +146,27 @@ def test_judicial_manual_manifest_preserves_time_location_and_four_state_facts()
     assert record.can_test == FourState.NO
 
 
+def test_judicial_separable_multi_motorcycle_lot_preserves_each_plate() -> None:
+    row = {
+        "saledate": "1150806", "saleno": "1", "ttitle": "大型重機（775-FBL）、大型重機（AV-681）",
+        "registeno": "大型重機（775-FBL）、大型重機（AV-681）", "qty": "2", "notes": "",
+        "sumprice": 0, "crtnm": "臺灣臺北地方法院", "crm": "115司執字第014612號", "pic_cnt": 0,
+    }
+    content = json.dumps(row, ensure_ascii=False).encode()
+    judicial_item = DiscoveredItem(
+        source_record_id="manual-tpd-2", official_url="https://aomp109.judicial.gov.tw/example.pdf",
+        title=row["ttitle"], discovery_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm",
+    )
+    source = RawArtifact(
+        official_url=judicial_item.official_url, fetched_at=datetime.fromisoformat("2026-08-09T00:00:00+00:00"),
+        mime_type="application/json", content=content, checksum_sha256=sha256(content).hexdigest(),
+    )
+    record = parse_judicial_record(judicial_item, source)
+    assert [identifier.original_value for identifier in record.identifiers] == ["775-FBL", "AV-681"]
+    assert len(record.vehicle_units) == 2
+    assert record.bulk_lot is True
+
+
 def test_single_motorcycle_preserves_unknown_semantics() -> None:
     record = parse_shwoo_detail(item(), artifact("shwoo_single.html"))
     assert record.official_case_number == "115Y431240018"

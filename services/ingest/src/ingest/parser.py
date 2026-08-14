@@ -460,8 +460,11 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
 
     identity_text = clean(" ".join((str(row.get("registeno") or ""), title, notes))).upper()
     vehicle_class, vehicle_class_text = motorcycle_class_from_official_text(f"{title} {notes}")
-    plate_match = re.search(r"(?<![A-Z0-9])([A-Z0-9]{2,4}[-－][A-Z0-9]{2,4})(?![A-Z0-9])", identity_text)
-    plate = plate_match.group(1).replace("－", "-") if plate_match else None
+    plates = list(dict.fromkeys(
+        match.group(1).replace("－", "-")
+        for match in re.finditer(r"(?<![A-Z0-9])([A-Z0-9]{2,4}[-－][A-Z0-9]{2,4})(?![A-Z0-9])", identity_text)
+    ))
+    plate = plates[0] if plates else None
     brand_raw = _label_value(notes, ("廠牌", "廠牌名稱"))
     brand_aliases = {"光陽": "KYMCO", "三陽": "SYM", "山葉": "YAMAHA", "台灣山葉": "YAMAHA"}
     if not brand_raw:
@@ -474,7 +477,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
     mileage = integer(_label_value(notes, ("里程數", "里程")))
     location = clean(str(row.get("location") or "")) or _label_value(notes, ("物品所在地", "拍賣地點"))
     has_key = FourState.NO if re.search(r"(?:無|沒有)\s*(?:機車)?鑰匙", notes) else FourState.YES if re.search(r"(?:有|附)\s*(?:機車)?鑰匙", notes) else FourState.UNKNOWN
-    can_start = FourState.NO if re.search(r"(?:無法|不能)發動|發不動", notes) else FourState.YES if re.search(r"(?:可|能)發動", notes) else FourState.UNKNOWN
+    can_start = FourState.NO if re.search(r"(?:無法|不能)(?:發動|啟動)|發不動", notes) else FourState.YES if re.search(r"(?:可|能)(?:發動|啟動)", notes) else FourState.UNKNOWN
     can_test = FourState.NO if re.search(r"(?:無法|不能|不得)測試", notes) else FourState.YES if re.search(r"(?:可|能)測試", notes) else FourState.UNKNOWN
     engine = _label_value(notes, ("引擎號碼", "引擎號", "引擎"))
     frame = _label_value(notes, ("車身號碼", "車架號碼", "車台號碼"))
@@ -490,10 +493,17 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
             manufacture_year = raw_year + 1911 if raw_year < 1911 else raw_year
             manufacture_month = int(manufacture_match.group(2))
 
-    identifiers: list[VehicleIdentifier] = []
-    for kind, value in (("PLATE", plate), ("ENGINE", engine), ("FRAME", frame)):
+    identifiers: list[VehicleIdentifier] = [
+        VehicleIdentifier(identifier_type="PLATE", normalized_value=normalize_identifier(value), original_value=value)
+        for value in plates
+    ]
+    for kind, value in (("ENGINE", engine), ("FRAME", frame)):
         if value:
             identifiers.append(VehicleIdentifier(identifier_type=kind, normalized_value=normalize_identifier(value), original_value=value))
+    vehicle_units = [
+        ParsedVehicleUnit(source_vehicle_key=f"plate:{normalize_identifier(value)}", identifiers=[identifier])
+        for value, identifier in zip(plates, identifiers[:len(plates)], strict=True)
+    ] if len(plates) > 1 else []
 
     reserve_raw = integer(str(row.get("sumprice") or ""))
     reserve_price = reserve_raw if reserve_raw and reserve_raw > 0 else None
@@ -513,11 +523,11 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
             evidence.append(_structured_evidence(field_name, normalized, source_value, key, trust))
     evidence.append(_structured_evidence("disposal_origin", "JUDICIAL_EXECUTION", organization, "crtnm", "OFFICIAL_INFERRED"))
     for field_name, normalized, source_value in [
-        ("plate", plate, plate), ("brand", brand, brand_raw), ("model", model, model),
+        ("plate", "、".join(plates) or None, "、".join(plates) or None), ("brand", brand, brand_raw), ("model", model, model),
         ("manufacture_year", manufacture_year, manufacture), ("displacement_cc", displacement, displacement_text),
         ("color", color, color), ("mileage_km", mileage, mileage), ("location", location, location),
         ("has_key", has_key.value, _explicit_fact_sentence(notes, r"鑰匙")),
-        ("can_start", can_start.value, _explicit_fact_sentence(notes, r"發動")),
+        ("can_start", can_start.value, _explicit_fact_sentence(notes, r"(?:發動|啟動)")),
         ("can_test", can_test.value, _explicit_fact_sentence(notes, r"測試")),
         ("engine", engine, engine), ("frame", frame, frame),
     ]:
@@ -527,7 +537,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         evidence.append(_structured_evidence("vehicle_class", vehicle_class.value, vehicle_class_text, "ttitle/notes"))
 
     completeness, groups = _completeness_groups({
-        "identity": [plate, brand, model, case_number],
+        "identity": [plates, brand, model, case_number],
         "auction": [organization, sale_date, auction_round, reserve_price, status],
         "condition": [has_key, can_start, can_test, notes],
         "registration": [RegistrationStatus.UNKNOWN, plate, FourState.UNKNOWN],
@@ -566,6 +576,7 @@ def parse_judicial_record(item: DiscoveredItem, artifact: RawArtifact) -> Parsed
         registration_status=RegistrationStatus.UNKNOWN,
         condition_summary=notes or None,
         identifiers=identifiers,
+        vehicle_units=vehicle_units,
         evidence=evidence,
         completeness=completeness,
         completeness_groups=groups,
