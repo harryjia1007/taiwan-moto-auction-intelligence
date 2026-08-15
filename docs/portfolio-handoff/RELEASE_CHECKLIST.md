@@ -20,4 +20,4 @@
 - [ ] Supabase migration、seed 與 pgTAP 已在正式相容環境完整驗證
 - [ ] 尚未授權或需要 CAPTCHA 的來源已取得可自動化依據
 
-最後驗證：2026 年 8 月 15 日；Cloudflare Worker version `aa3b6a80-ad3c-4ff2-8596-fc94e159cb84`。
+最後驗證：2026 年 8 月 15 日；正式頁已通過案件載入、本機收藏與公開詳細頁 smoke test；Cloudflare Worker version `915d2627-76c6-4d34-8fb2-8ee6bf5f5dfe`。
