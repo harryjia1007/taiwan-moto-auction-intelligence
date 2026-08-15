@@ -19,9 +19,9 @@ export function isScrapMarketplaceRecord(
 }
 
 export const DISPLACEMENT_QUERY_VALUES: Record<DisplacementBand, string> = {
-  LE_50: "le-50",
-  CC_51_125: "51-125",
-  CC_126_250: "126-250",
+  LE_125: "le-125",
+  CC_126_150: "126-150",
+  CC_151_250: "151-250",
   CC_251_550: "251-550",
   GT_550: "gt-550",
   UNKNOWN: "unknown",
@@ -34,9 +34,9 @@ export function displacementBandFromQuery(value: string): DisplacementBand | nul
 export function matchesDisplacementBand(value: number | null, band: DisplacementBand): boolean {
   if (band === "UNKNOWN") return value === null;
   if (value === null || !Number.isFinite(value) || value <= 0) return false;
-  if (band === "LE_50") return value <= 50;
-  if (band === "CC_51_125") return value >= 51 && value <= 125;
-  if (band === "CC_126_250") return value >= 126 && value <= 250;
+  if (band === "LE_125") return value <= 125;
+  if (band === "CC_126_150") return value >= 126 && value <= 150;
+  if (band === "CC_151_250") return value >= 151 && value <= 250;
   if (band === "CC_251_550") return value >= 251 && value <= 550;
   return value > 550;
 }

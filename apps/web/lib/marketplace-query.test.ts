@@ -3,8 +3,8 @@ import { parseMarketplaceQuery, sanitizedMarketplaceQuery } from "./marketplace-
 
 describe("marketplace query parsing", () => {
   it("accepts repeated reviewed CC bands and rejects unknown values", () => {
-    const query = new URLSearchParams("cc=51-125&cc=126-250&cc=bad");
-    expect(parseMarketplaceQuery(query).filters.displacementBands).toEqual(["CC_51_125", "CC_126_250"]);
+    const query = new URLSearchParams("cc=le-125&cc=126-150&cc=bad");
+    expect(parseMarketplaceQuery(query).filters.displacementBands).toEqual(["LE_125", "CC_126_150"]);
   });
 
   it("clears future-only deadlines from the ended view", () => {

@@ -170,9 +170,9 @@ function applyDatabaseFilters(query: any, filters: MotorcycleFilters, favoriteId
   if (filters.displacementBands?.length) {
     const clauses = filters.displacementBands.map((band) => {
       if (band === "UNKNOWN") return "displacement_cc.is.null";
-      if (band === "LE_50") return "displacement_cc.lte.50";
-      if (band === "CC_51_125") return "and(displacement_cc.gte.51,displacement_cc.lte.125)";
-      if (band === "CC_126_250") return "and(displacement_cc.gte.126,displacement_cc.lte.250)";
+      if (band === "LE_125") return "displacement_cc.lte.125";
+      if (band === "CC_126_150") return "and(displacement_cc.gte.126,displacement_cc.lte.150)";
+      if (band === "CC_151_250") return "and(displacement_cc.gte.151,displacement_cc.lte.250)";
       if (band === "CC_251_550") return "and(displacement_cc.gte.251,displacement_cc.lte.550)";
       return "displacement_cc.gt.550";
     });

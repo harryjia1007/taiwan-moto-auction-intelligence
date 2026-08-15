@@ -15,7 +15,7 @@ type Params = Record<string, string | string[] | undefined>;
 const first = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value;
 const all = (value: string | string[] | undefined) => Array.isArray(value) ? value : value ? [value] : [];
 const classValues = new Set<MotorcycleClass>(["ORDINARY_LIGHT","ORDINARY_HEAVY","LARGE_HEAVY","ELECTRIC_MOTORCYCLE","HEAVY_UNSPECIFIED","UNKNOWN"]);
-const ccLabels: Record<string,string> = { "le-50": "50 以下", "51-125": "51–125", "126-250": "126–250", "251-550": "251–550", "gt-550": "551 以上", unknown: "未提供" };
+const ccLabels: Record<string,string> = { "le-125": "125 以下", "126-150": "126–150", "151-250": "151–250", "251-550": "251–550", "gt-550": "551 以上", unknown: "未提供" };
 
 function demoHref(params: Params, view: "active" | "ended", within?: number) {
   const query = new URLSearchParams();

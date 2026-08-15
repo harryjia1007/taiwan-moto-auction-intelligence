@@ -18,7 +18,7 @@ Returns `{ items, nextCursor, total }`. `total` is the exact count before pagina
 | `eligibility` | enum | Shared `BidEligibility` value |
 | `registration` | enum | Shared `RegistrationStatus` value |
 | `vehicleClass` | enum | Official class: ordinary light/heavy, large heavy, electric, heavy-unspecified, or unknown |
-| `cc` | repeatable enum | `le-50`, `51-125`, `126-250`, `251-550`, `gt-550`, or `unknown`; repeat the key for multi-select |
+| `cc` | repeatable enum | `le-125`, `126-150`, `151-250`, `251-550`, `gt-550`, or `unknown`; repeat the key for multi-select |
 | `hasPhotos` | boolean | Require an available cached photo |
 | `singleVehicle` | boolean | Exclude bulk lots |
 | `excludeScrap` | boolean | Exclude scrap-only and non-relicensable records |

@@ -33,7 +33,7 @@ export const MOTORCYCLE_CLASSES = [
 export type MotorcycleClass = (typeof MOTORCYCLE_CLASSES)[number];
 
 export const DISPLACEMENT_BANDS = [
-  "LE_50", "CC_51_125", "CC_126_250", "CC_251_550", "GT_550", "UNKNOWN",
+  "LE_125", "CC_126_150", "CC_151_250", "CC_251_550", "GT_550", "UNKNOWN",
 ] as const;
 export type DisplacementBand = (typeof DISPLACEMENT_BANDS)[number];
 

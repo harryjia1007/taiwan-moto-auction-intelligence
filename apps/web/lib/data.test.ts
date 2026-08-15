@@ -37,8 +37,8 @@ describe("marketplace filters", () => {
     expect(matchesFilters(fixtureMotorcycles[1]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(false);
   });
   it("filters non-overlapping displacement bands and keeps missing CC explicit", () => {
-    expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["CC_51_125"] })).toBe(true);
-    expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["CC_126_250"] })).toBe(false);
+    expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["LE_125"] })).toBe(true);
+    expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["CC_126_150"] })).toBe(false);
     const unknownDisplacement = fixtureMotorcycles.find((item) => item.displacementCc === null);
     expect(unknownDisplacement).toBeDefined();
     expect(matchesFilters(unknownDisplacement!, { displacementBands: ["UNKNOWN"] })).toBe(true);

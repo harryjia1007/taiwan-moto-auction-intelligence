@@ -3,7 +3,7 @@ name: Scheduled official-source ingestion
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 4,10,16,22 * * *"
+    - cron: "30 1,13 * * *"
 
 concurrency:
   group: official-source-ingestion
@@ -26,17 +26,17 @@ jobs:
       - name: Validate hosted ingestion credentials
         run: |
           test -n "$SUPABASE_URL" || { echo "Missing SUPABASE_URL repository secret"; exit 1; }
-          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "Missing SUPABASE_SERVICE_ROLE_KEY repository secret"; exit 1; }
+          test -n "$SUPABASE_SECRET_KEY" || { echo "Missing SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY) repository secret"; exit 1; }
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - name: Check Taipei Shwoo
         run: python -m ingest healthcheck --source shwoo
       - name: Publish Taipei Shwoo
         run: python -m ingest publish-public --source shwoo
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RAW_ARTIFACT_BUCKET: raw-artifacts
           SHWOO_REQUEST_INTERVAL_SECONDS: "1"
       - name: Check MOJ centralized auction
@@ -45,6 +45,6 @@ jobs:
         run: python -m ingest publish-public --source moj_auction
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RAW_ARTIFACT_BUCKET: raw-artifacts
           MOJ_AUCTION_REQUEST_INTERVAL_SECONDS: "1"

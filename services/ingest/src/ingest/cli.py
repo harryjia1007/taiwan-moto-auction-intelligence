@@ -26,6 +26,11 @@ PUBLIC_AUTOMATED_SOURCES = {
 }
 
 
+def supabase_backend_key() -> str | None:
+    """Prefer Supabase's current secret key while retaining legacy compatibility."""
+    return os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+
 def exception_message(exc: Exception) -> str:
     """Keep run warnings useful even for exceptions with an empty string form."""
     return str(exc).strip() or exc.__class__.__name__
@@ -137,7 +142,7 @@ async def run_sync(source: str, limit: int | None, manifest: Path | None = None)
     if not database_url:
         raise RuntimeError("DATABASE_URL is required for sync; run the local Supabase stack first")
     supabase_url = os.getenv("SUPABASE_URL")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_key = supabase_backend_key()
     storage = SupabaseArtifactStorage(supabase_url, service_key, os.getenv("RAW_ARTIFACT_BUCKET", "raw-artifacts")) if supabase_url and service_key else LocalArtifactStorage()
     repository = DatabaseRepository(database_url, storage, source)
     if source == "moj_enforcement" and manifest is None:
@@ -181,9 +186,9 @@ async def run_publish_public(source: str, limit: int | None) -> None:
         )
     require_live_access(source)
     supabase_url = os.getenv("SUPABASE_URL")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_key = supabase_backend_key()
     if not supabase_url or not service_key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY) are required")
     adapter = adapter_for(source)
     publisher = SupabasePublicPublisher(
         supabase_url,
@@ -226,7 +231,7 @@ async def run_reprocess(source: str, from_parser_version: str | None, limit: int
     if not database_url:
         raise RuntimeError("DATABASE_URL is required for reprocessing; run the local Supabase stack first")
     supabase_url = os.getenv("SUPABASE_URL")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_key = supabase_backend_key()
     storage = SupabaseArtifactStorage(supabase_url, service_key, os.getenv("RAW_ARTIFACT_BUCKET", "raw-artifacts")) if supabase_url and service_key else LocalArtifactStorage()
     repository = DatabaseRepository(database_url, storage, source)
     adapter = adapter_for(source)
@@ -259,7 +264,7 @@ async def run_retention(source: str, execute: bool) -> None:
     if not database_url:
         raise RuntimeError("DATABASE_URL is required for retention review")
     supabase_url = os.getenv("SUPABASE_URL")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_key = supabase_backend_key()
     storage = SupabaseArtifactStorage(supabase_url, service_key, os.getenv("RAW_ARTIFACT_BUCKET", "raw-artifacts")) if supabase_url and service_key else LocalArtifactStorage()
     rows = await DatabaseRepository(database_url, storage, source).purge_expired_artifacts(execute=execute)
     typer.echo(json.dumps({

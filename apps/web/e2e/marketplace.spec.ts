@@ -13,10 +13,10 @@ test("server health is public and never cached", async ({ request }) => {
 });
 
 test("public portfolio demo is synthetic, filterable, and does not require owner login", async ({ page }) => {
-  await page.goto("/demo?view=active&within=30&cc=51-125&cc=126-250");
+  await page.goto("/demo?view=active&within=30&cc=le-125&cc=126-150");
   await expect(page.getByRole("heading", { name: /先看能不能買/ })).toBeVisible();
   await expect(page.getByText("互動作品展示・全部為合成資料")).toBeVisible();
-  await expect(page.getByText("進行中・30 天內・51–125 c.c.・126–250 c.c.", { exact: false })).toBeVisible();
+  await expect(page.getByText("進行中・30 天內・125 以下 c.c.・126–150 c.c.", { exact: false })).toBeVisible();
   await expect(page.getByText("都會通勤機車 A")).toBeVisible();
   await expect(page.getByText("大型重型機車 B")).toHaveCount(0);
   await expect(page.getByText("普通輕型機車 D")).toHaveCount(0);
@@ -24,9 +24,9 @@ test("public portfolio demo is synthetic, filterable, and does not require owner
 });
 
 test("CC filters and ended state are URL-backed with a clear browsing summary", async ({ page }) => {
-  await page.goto("/motorcycles?view=active&within=30&vehicleClass=ORDINARY_HEAVY&cc=51-125&cc=126-250");
-  await expect(page.getByLabel("目前瀏覽條件")).toContainText("進行中・30 天內・普通重型機車・51–125 c.c.・126–250 c.c.");
-  await expect(page.getByLabel("目前套用條件").getByText("排氣量：51–125 c.c.")).toBeVisible();
+  await page.goto("/motorcycles?view=active&within=30&vehicleClass=ORDINARY_HEAVY&cc=le-125&cc=126-150");
+  await expect(page.getByLabel("目前瀏覽條件")).toContainText("進行中・30 天內・普通重型機車・125 c.c. 以下・126–150 c.c.");
+  await expect(page.getByLabel("目前套用條件").getByText("排氣量：125 c.c. 以下")).toBeVisible();
   await page.getByRole("link", { name: /看歷史/ }).click();
   await expect(page).toHaveURL(/view=ended/);
   await expect(page).not.toHaveURL(/within=/);

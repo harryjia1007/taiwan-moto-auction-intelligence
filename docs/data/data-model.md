@@ -18,6 +18,6 @@ The `motorcycle_marketplace_listing` owner-only read model exposes normalized `c
 
 `vehicle_category` uses `ORDINARY_LIGHT`, `ORDINARY_HEAVY`, `LARGE_HEAVY`, `ELECTRIC_MOTORCYCLE`, `HEAVY_UNSPECIFIED`, or `UNKNOWN` on both vehicles and inseparable lots. The value is normalized only from explicit official wording. It is not derived from displacement because derived class and official class are different claims.
 
-`vehicles.displacement_cc` has a separate B-tree index for explicit CC filtering. `UNKNOWN` matches only SQL `NULL`; the ranges 50-or-less, 51–125, 126–250, 251–550, and over-550 never overlap.
+`vehicles.displacement_cc` has a separate B-tree index for explicit CC filtering. `UNKNOWN` matches only SQL `NULL`; the shopping ranges 125-or-less, 126–150, 151–250, 251–550, and over-550 never overlap. These ranges do not replace the separate official motorcycle class.
 
 Private raw bytes receive a `retention_until` deadline based on the auction end time when known, otherwise fetch time, plus 12 months. Retention deletion removes only Storage bytes and appends an `artifact_tombstones` audit row; immutable checksum, source, and artifact metadata remain. Deletion is an explicit maintenance command and defaults to dry-run.

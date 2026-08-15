@@ -15,7 +15,7 @@ const filterLabels: Record<string, string> = {
 };
 
 const ccLabels: Record<string, string> = {
-  "le-50": "50 c.c. 以下", "51-125": "51–125 c.c.", "126-250": "126–250 c.c.",
+  "le-125": "125 c.c. 以下", "126-150": "126–150 c.c.", "151-250": "151–250 c.c.",
   "251-550": "251–550 c.c.", "gt-550": "551 c.c. 以上", unknown: "官方未提供",
 };
 
