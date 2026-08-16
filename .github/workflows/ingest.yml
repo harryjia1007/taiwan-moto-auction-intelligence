@@ -16,8 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - source: shwoo
-            label: 臺北惜物網
           - source: moj_auction
             label: 法務部集中拍賣
     runs-on: ubuntu-latest
@@ -45,5 +43,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RAW_ARTIFACT_BUCKET: raw-artifacts
-          SHWOO_REQUEST_INTERVAL_SECONDS: "1"
           MOJ_AUCTION_REQUEST_INTERVAL_SECONDS: "1"
