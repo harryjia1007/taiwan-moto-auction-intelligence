@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
-        with: { version: latest }
+        with: { version: 2.112.0 }
       - run: supabase start
       - run: supabase db reset
       - run: supabase test db
