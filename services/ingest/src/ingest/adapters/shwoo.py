@@ -112,12 +112,18 @@ class ShwooAdapter(SourceAdapter):
         discovered: dict[str, DiscoveredItem] = {}
         for recycler_only in (False, True):
             for keyword in self.KEYWORDS:
-                response = await self._request("POST", action, data={
-                    "showPage": "1", "showType": "", "q_keyword": keyword,
-                    "q_autioncode": "", "q_county_query": "", "q_order": "BidEndDate_desc",
-                    "q_unit1value4C": "", "isRecyclerRadio": "Y" if recycler_only else "N",
-                    "onlyTodayChecked": "",
-                })
+                try:
+                    response = await self._request("POST", action, data={
+                        "showPage": "1", "showType": "", "q_keyword": keyword,
+                        "q_autioncode": "", "q_county_query": "", "q_order": "BidEndDate_desc",
+                        "q_unit1value4C": "", "isRecyclerRadio": "Y" if recycler_only else "N",
+                        "onlyTodayChecked": "",
+                    })
+                except httpx.TimeoutException:
+                    # One slow keyword response must not discard listings already
+                    # discovered from the other official search variants. Policy
+                    # errors (403/429) still propagate and fail closed.
+                    continue
                 for item in self._detail_items(response.content, str(response.url), recycler_only):
                     discovered[item.source_record_id] = item
 

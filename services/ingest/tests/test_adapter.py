@@ -30,6 +30,32 @@ async def test_discovery_deduplicates_keyword_and_eligibility_results() -> None:
     assert items[0].source_record_id == "939528"
 
 
+@pytest.mark.asyncio
+async def test_discovery_keeps_other_keyword_results_after_one_timeout() -> None:
+    browse = b'<form id="autionId" method="post" action="/shwoo/browse/browse00/advancedQuery"></form>'
+    results = '<a href="/shwoo/newproduct/newproduct00/product?AUID=939528">機器腳踏車1台</a>'
+    advanced_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal advanced_calls
+        if request.url.path.endswith("browse00/"):
+            return httpx.Response(200, content=browse, headers={"content-type": "text/html"})
+        if request.url.path.endswith("advancedQuery"):
+            advanced_calls += 1
+            if advanced_calls <= 3:
+                raise httpx.ReadTimeout("one official search variant was slow", request=request)
+            return httpx.Response(200, text=results, headers={"content-type": "text/html"})
+        if request.url.path.endswith("bidresult"):
+            return httpx.Response(200, text=results, headers={"content-type": "text/html"})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        adapter = ShwooAdapter(client=client, request_interval=0)
+        items = await adapter.discover()
+
+    assert [item.source_record_id for item in items] == ["939528"]
+
+
 def test_completed_result_uses_official_title_cell_not_query_link() -> None:
     result = b"""
       <table><tr>
