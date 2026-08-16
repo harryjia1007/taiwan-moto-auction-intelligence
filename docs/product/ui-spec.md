@@ -14,6 +14,7 @@ The visual system follows a premium editorial-utility direction: warm neutral pa
 ## Rules
 
 - Default to the `進行中` view and sort by the nearest auction deadline. `已結束紀錄`, `我的收藏`, and the isolated `報廢／回收專區` remain one click away.
+- Display the most recent successful production sync and a prominent warning when it is older than 36 hours. A failed run preserves prior listings and must never appear as a legitimate zero-result refresh.
 - Normal marketplace views always exclude scrap-only, cannot-relicense, and licensed-recycler records. A query parameter cannot accidentally mix these records back into general shopping.
 - Let the user choose all vehicles, motorcycles, cars, or inseparable mixed batches before applying type-specific filters. Motorcycle class/CC and car category are independent controls and never cross-apply.
 - Show official motorcycle class for motorcycles and official car category for cars. `UNKNOWN` and `HEAVY_UNSPECIFIED` remain visible rather than inferred from displacement.

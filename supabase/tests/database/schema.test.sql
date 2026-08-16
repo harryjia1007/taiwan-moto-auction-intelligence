@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(45);
+select plan(47);
 
 select has_table('public', 'raw_artifacts', 'raw artifacts exist');
 select has_table('public', 'field_evidence', 'field evidence exists');
@@ -11,6 +11,9 @@ select has_table('public', 'data_subject_requests', 'correction and deletion req
 select has_trigger('public', 'artifact_tombstones', 'artifact_tombstones_immutable', 'artifact deletion audit is append-only');
 select has_view('public', 'motorcycle_listing', 'motorcycle read model exists');
 select has_view('public', 'motorcycle_marketplace_listing', 'multi-source and bulk-lot read model exists');
+select has_view('public', 'vehicle_marketplace_listing', 'car-and-motorcycle read model exists');
+select has_column('public', 'vehicle_marketplace_listing', 'vehicle_type', 'vehicle marketplace exposes explicit vehicle type');
+select has_column('public', 'vehicle_marketplace_listing', 'car_category', 'vehicle marketplace exposes explicit car category');
 select has_function('public', 'taiwan_county_from_text', array['text'], 'county normalization is deterministic in the database');
 select is(taiwan_county_from_text('臺灣臺中地方法院'), '臺中市', 'county normalization works for court organization names');
 select is(taiwan_county_from_text('新竹縣竹北市 臺灣新竹地方法院'), '新竹縣', 'an explicit storage county wins over a court-name fallback');

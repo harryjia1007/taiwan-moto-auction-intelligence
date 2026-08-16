@@ -25,7 +25,7 @@ test("public portfolio demo is synthetic, filterable, and does not require owner
 
 test("CC filters and ended state are URL-backed with a clear browsing summary", async ({ page }) => {
   await page.goto("/motorcycles?view=active&within=30&vehicleClass=ORDINARY_HEAVY&cc=le-125&cc=126-150");
-  await expect(page.getByLabel("目前瀏覽條件")).toContainText("進行中・30 天內・普通重型機車・125 c.c. 以下・126–150 c.c.");
+  await expect(page.getByLabel("目前瀏覽條件")).toContainText("進行中・機車・30 天內・普通重型機車・125 c.c. 以下・126–150 c.c.");
   await expect(page.getByLabel("目前套用條件").getByText("排氣量：125 c.c. 以下")).toBeVisible();
   await page.getByRole("link", { name: /看歷史/ }).click();
   await expect(page).toHaveURL(/view=ended/);
@@ -34,7 +34,7 @@ test("CC filters and ended state are URL-backed with a clear browsing summary", 
 
 test("search, filter, favorite, and evidence workflow", async ({ page }) => {
   await page.goto("/motorcycles");
-  await expect(page.getByRole("heading", { name: "今天想找什麼機車？" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "今天想找什麼車？" })).toBeVisible();
   await expect(page.getByLabel("地區")).toBeVisible();
   await expect(page.getByLabel("資料來源")).toBeVisible();
   await expect(page.getByLabel("排序方式")).toBeVisible();
@@ -56,7 +56,7 @@ test("search, filter, favorite, and evidence workflow", async ({ page }) => {
   await favorite.click();
   await expect(page.getByRole("button", { name: "移除收藏" })).toHaveAttribute("aria-pressed", "true");
   await page.goto("/motorcycles?view=favorites");
-  await expect(page.getByRole("heading", { name: "今天想找什麼機車？" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "今天想找什麼車？" })).toBeVisible();
   await expect(page.getByRole("link", { name: "SYM HM12VB", exact: true })).toBeVisible();
 });
 
@@ -101,7 +101,7 @@ test("nationwide source and disposal-origin filters are bookmarkable", async ({ 
   await expect(page.locator(".moto-card").filter({ hasText: "KYMCO SJ25HE" }).getByText("司法院 22 地院動產法拍")).toBeVisible();
   await expect(page.getByLabel("資料來源")).toHaveValue("judicial");
   await page.getByRole("link", { name: "普通重型機車（司法測試）", exact: true }).click();
-  const judicialSource = page.getByRole("link", { name: /查看司法拍賣來源說明/ }).first();
+  const judicialSource = page.getByRole("link", { name: /查看司法院法拍來源/ }).first();
   await expect(judicialSource).toHaveAttribute("href", "https://www.judicial.gov.tw/tw/lp-85-1.html");
 });
 
