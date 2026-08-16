@@ -26,7 +26,10 @@ class MojAuctionAdapter(SourceAdapter):
     MAX_PAGES = 10
     PAGE_SIZE = 100
     MAX_ATTACHMENTS = 25
-    MOTORCYCLE_TERMS = ("機車", "機器腳踏車", "重機")
+    VEHICLE_TERMS = (
+        "機車", "機器腳踏車", "重機", "汽車", "小客車", "大客車",
+        "小貨車", "大貨車", "客貨兩用車", "休旅車", "轎車", "廂型車", "貨車",
+    )
 
     def __init__(self, client: httpx.AsyncClient | None = None, request_interval: float = 1.0) -> None:
         self.client = client or httpx.AsyncClient(
@@ -99,7 +102,7 @@ class MojAuctionAdapter(SourceAdapter):
             if not link:
                 continue
             title = " ".join(link.stripped_strings).strip()
-            if not any(term in title for term in cls.MOTORCYCLE_TERMS) or "電力機車" in title:
+            if not any(term in title for term in cls.VEHICLE_TERMS) or "電力機車" in title:
                 continue
             href = urljoin(cls.ORIGIN, link.get("href", ""))
             parsed = urlparse(href)

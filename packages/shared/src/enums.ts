@@ -32,6 +32,12 @@ export const MOTORCYCLE_CLASSES = [
 ] as const;
 export type MotorcycleClass = (typeof MOTORCYCLE_CLASSES)[number];
 
+export const VEHICLE_TYPES = ["MOTORCYCLE", "CAR", "MIXED", "UNKNOWN"] as const;
+export type VehicleType = (typeof VEHICLE_TYPES)[number];
+
+export const CAR_CATEGORIES = ["PASSENGER", "SUV", "VAN", "TRUCK", "BUS", "OTHER", "UNKNOWN"] as const;
+export type CarCategory = (typeof CAR_CATEGORIES)[number];
+
 export const DISPLACEMENT_BANDS = [
   "LE_125", "CC_126_150", "CC_151_250", "CC_251_550", "GT_550", "UNKNOWN",
 ] as const;

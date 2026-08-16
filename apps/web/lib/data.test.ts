@@ -36,6 +36,13 @@ describe("marketplace filters", () => {
     expect(matchesFilters(fixtureMotorcycles[5]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(true);
     expect(matchesFilters(fixtureMotorcycles[1]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(false);
   });
+  it("separates cars, motorcycles, and car categories", () => {
+    const car = { ...fixtureMotorcycles[0]!, vehicleType: "CAR" as const, carCategory: "SUV" as const, vehicleClass: "UNKNOWN" as const };
+    expect(matchesFilters(car, { vehicleType: "CAR" })).toBe(true);
+    expect(matchesFilters(car, { vehicleType: "MOTORCYCLE" })).toBe(false);
+    expect(matchesFilters(car, { vehicleType: "CAR", carCategory: "SUV" })).toBe(true);
+    expect(matchesFilters(car, { vehicleType: "CAR", carCategory: "TRUCK" })).toBe(false);
+  });
   it("filters non-overlapping displacement bands and keeps missing CC explicit", () => {
     expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["LE_125"] })).toBe(true);
     expect(matchesFilters(fixtureMotorcycles[0]!, { displacementBands: ["CC_126_150"] })).toBe(false);

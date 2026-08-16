@@ -22,4 +22,22 @@ describe("marketplace query parsing", () => {
     expect(filters.auctionWithinDays).toBeUndefined();
     expect(filters.county).toBeUndefined();
   });
+
+  it("keeps car and motorcycle filters mutually exclusive", () => {
+    const car = parseMarketplaceQuery(new URLSearchParams("vehicleType=MOTORCYCLE&carCategory=SUV&cc=le-125")).filters;
+    expect(car.vehicleType).toBe("CAR");
+    expect(car.carCategory).toBe("SUV");
+    expect(car.displacementBands).toBeUndefined();
+    const motorcycle = parseMarketplaceQuery(new URLSearchParams("vehicleType=CAR&vehicleClass=ORDINARY_HEAVY")).filters;
+    expect(motorcycle.vehicleType).toBe("MOTORCYCLE");
+    expect(motorcycle.vehicleClass).toBe("ORDINARY_HEAVY");
+    expect(motorcycle.carCategory).toBeUndefined();
+  });
+
+  it("round-trips reviewed vehicle and car categories", () => {
+    const clean = sanitizedMarketplaceQuery(new URLSearchParams("vehicleType=CAR&carCategory=TRUCK&cc=le-125"));
+    expect(clean.toString()).toContain("vehicleType=CAR");
+    expect(clean.toString()).toContain("carCategory=TRUCK");
+    expect(clean.has("cc")).toBe(false);
+  });
 });

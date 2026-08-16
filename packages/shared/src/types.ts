@@ -1,6 +1,6 @@
 import type {
   AdapterStatus, AuctionStatus, BidEligibility, DisposalOrigin, DisplacementBand,
-  FourState, MotorcycleClass, RegistrationStatus, SourceTrust,
+  CarCategory, FourState, MotorcycleClass, RegistrationStatus, SourceTrust, VehicleType,
 } from "./enums";
 
 export interface Evidence {
@@ -54,7 +54,9 @@ export interface Motorcycle {
   manufactureYear: number | null;
   manufactureMonth: number | null;
   displacementCc: number | null;
+  vehicleType?: VehicleType;
   vehicleClass: MotorcycleClass;
+  carCategory?: CarCategory;
   plateNumber: string | null;
   color: string | null;
   organization: string;
@@ -116,7 +118,9 @@ export interface MotorcycleFilters {
   brand?: string;
   eligibility?: BidEligibility;
   registration?: RegistrationStatus;
+  vehicleType?: VehicleType;
   vehicleClass?: MotorcycleClass;
+  carCategory?: CarCategory;
   displacementBands?: DisplacementBand[];
   hasPhotos?: boolean;
   singleVehicle?: boolean;

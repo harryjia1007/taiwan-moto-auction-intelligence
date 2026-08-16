@@ -98,7 +98,9 @@ export function matchesFilters(motorcycle: Motorcycle, filters: MotorcycleFilter
   if (filters.brand && motorcycle.brand !== filters.brand) return false;
   if (filters.eligibility && motorcycle.bidEligibility !== filters.eligibility) return false;
   if (filters.registration && motorcycle.registrationStatus !== filters.registration) return false;
+  if (filters.vehicleType && motorcycle.vehicleType !== filters.vehicleType) return false;
   if (filters.vehicleClass && motorcycle.vehicleClass !== filters.vehicleClass) return false;
+  if (filters.carCategory && motorcycle.carCategory !== filters.carCategory) return false;
   if (filters.displacementBands?.length && !filters.displacementBands.some((band) => matchesDisplacementBand(motorcycle.displacementCc, band))) return false;
   if (filters.hasPhotos === true && !(motorcycle.imageUrls?.length || motorcycle.imageUrl)) return false;
   if (filters.singleVehicle === true && motorcycle.bulkLot) return false;
@@ -126,7 +128,9 @@ function mapRow(row: Record<string, unknown>, favorite = false): Motorcycle {
     officialTitle: String(row.official_title ?? "未命名標售"), name: [row.brand_name, row.model_name].filter(Boolean).join(" ") || String(row.official_title),
     brand: row.brand_name as string | null, model: row.model_name as string | null, manufactureYear: row.manufacture_year as number | null,
     manufactureMonth: row.manufacture_month as number | null,
+    vehicleType: (row.vehicle_type ?? (row.vehicle_category && row.vehicle_category !== "UNKNOWN" ? "MOTORCYCLE" : "UNKNOWN")) as Motorcycle["vehicleType"],
     vehicleClass: (row.vehicle_category ?? "UNKNOWN") as Motorcycle["vehicleClass"],
+    carCategory: (row.car_category ?? "UNKNOWN") as Motorcycle["carCategory"],
     displacementCc: row.displacement_cc as number | null, plateNumber: row.plate_number as string | null, color: row.color as string | null,
     organization: String(row.organization_name ?? "未辨識機關"), location, county: (row.county as string | null) ?? countyFromLocation(location),
     disposalOrigin: row.disposal_origin as Motorcycle["disposalOrigin"], auctionStatus: row.auction_status as Motorcycle["auctionStatus"],
@@ -166,7 +170,9 @@ function applyDatabaseFilters(query: any, filters: MotorcycleFilters, favoriteId
   if (filters.brand) query = query.eq("brand_name", filters.brand);
   if (filters.eligibility) query = query.eq("eligibility", filters.eligibility);
   if (filters.registration) query = query.eq("registration_status", filters.registration);
+  if (filters.vehicleType) query = query.eq("vehicle_type", filters.vehicleType);
   if (filters.vehicleClass) query = query.eq("vehicle_category", filters.vehicleClass);
+  if (filters.carCategory) query = query.eq("car_category", filters.carCategory);
   if (filters.displacementBands?.length) {
     const clauses = filters.displacementBands.map((band) => {
       if (band === "UNKNOWN") return "displacement_cc.is.null";
@@ -210,10 +216,10 @@ export async function listMotorcycles(filters: MotorcycleFilters, viewer: Viewer
   if (filters.marketView === "favorites" && favoriteIds.size === 0) return { items: [], nextCursor: null, total: 0 };
 
   const now = new Date();
-  let countQuery = supabase.from("motorcycle_marketplace_listing").select("id", { count: "exact", head: true });
+  let countQuery = supabase.from("vehicle_marketplace_listing").select("id", { count: "exact", head: true });
   countQuery = applyDatabaseFilters(countQuery, filters, favoriteIds, now);
 
-  let query = supabase.from("motorcycle_marketplace_listing").select("*");
+  let query = supabase.from("vehicle_marketplace_listing").select("*");
   query = applyDatabaseFilters(query, filters, favoriteIds, now);
   const sortColumn = sort === "price_asc" || sort === "price_desc" ? "display_price" : sort === "completeness_desc" ? "completeness" : "auction_at";
   const ascending = sort === "auction_asc" || sort === "price_asc";
@@ -265,7 +271,7 @@ export async function getMotorcycle(id: string, viewer: Viewer): Promise<Motorcy
   }
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) return null;
   const supabase = await createSupabaseServerClient();
-  const { data: row, error } = await supabase.from("motorcycle_marketplace_listing").select("*").eq("id", id).maybeSingle();
+  const { data: row, error } = await supabase.from("vehicle_marketplace_listing").select("*").eq("id", id).maybeSingle();
   if (error || !row) return null;
   const listingEntity = row.listing_entity === "lot" ? "lot" : "vehicle";
   const photoKey = listingEntity === "lot" ? "lot_id" : "vehicle_id";

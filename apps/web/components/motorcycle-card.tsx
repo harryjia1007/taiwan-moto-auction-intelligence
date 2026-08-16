@@ -6,6 +6,9 @@ import { disposalOriginLabels, eligibilityLabels, fourStateLabels, motorcycleCla
 import { FavoriteButton } from "./favorite-button";
 import { PhotoGallery } from "./photo-gallery";
 
+const vehicleTypeLabels = { MOTORCYCLE: "機車", CAR: "汽車", MIXED: "汽機車混合批次", UNKNOWN: "車種未確認" } as const;
+const carCategoryLabels = { PASSENGER: "小客車／轎車", SUV: "休旅車", VAN: "廂型／客貨車", TRUCK: "貨車", BUS: "大客車／遊覽車", OTHER: "其他汽車", UNKNOWN: "汽車類別未確認" } as const;
+
 function date(value: string | null, precision: "DATE" | "DATETIME" = "DATETIME") {
   if (!value) return "日期未確認";
   const options: Intl.DateTimeFormatOptions = precision === "DATE"
@@ -31,6 +34,12 @@ function price(motorcycle: Motorcycle) {
 }
 
 export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
+  const vehicleType = motorcycle.vehicleType ?? "MOTORCYCLE";
+  const classification = vehicleType === "CAR"
+    ? carCategoryLabels[motorcycle.carCategory ?? "UNKNOWN"]
+    : vehicleType === "MOTORCYCLE"
+      ? motorcycleClassLabels[motorcycle.vehicleClass]
+      : vehicleTypeLabels[vehicleType];
   const cachedImages = [...new Set([
     ...(motorcycle.imageUrls ?? []),
     ...(motorcycle.imageUrl ? [motorcycle.imageUrl] : []),
@@ -67,7 +76,7 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
       <h2 className="card-title"><Link href={href}>{motorcycle.name}</Link></h2>
       <p className="agency">{motorcycle.organization}</p>
 
-      <div className="identity-line"><Badge tone="info">{motorcycleClassLabels[motorcycle.vehicleClass]}</Badge>{motorcycle.bulkLot && <Badge tone="warn">{motorcycle.lotSize > 1 ? `${motorcycle.lotSize} 臺整批` : "整批標售"}</Badge>}</div>
+      <div className="identity-line"><Badge tone="info">{vehicleTypeLabels[vehicleType]}</Badge><Badge tone="info">{classification}</Badge>{motorcycle.bulkLot && <Badge tone="warn">{motorcycle.lotSize > 1 ? `${motorcycle.lotSize} 臺整批` : "整批標售"}</Badge>}</div>
 
       <div className="purchase-gates" aria-label="投標與領牌判斷">
         <div className={`gate gate-${eligibilityTone}`}><span>誰能投標</span><strong>{eligibilityLabels[motorcycle.bidEligibility]}</strong></div>
@@ -80,9 +89,9 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
       </div>
 
       <dl className="vehicle-specs">
-        <div><dt>機車級別</dt><dd>{motorcycleClassLabels[motorcycle.vehicleClass]}</dd></div>
+        <div><dt>{vehicleType === "CAR" ? "汽車類別" : vehicleType === "MOTORCYCLE" ? "機車級別" : "批次類型"}</dt><dd>{classification}</dd></div>
         <div><dt>出廠年月</dt><dd>{manufacture}</dd></div>
-        <div><dt>排氣量</dt><dd>{motorcycle.displacementCc ? `${motorcycle.displacementCc} c.c.` : "未確認"}</dd></div>
+        <div><dt>{vehicleType === "MOTORCYCLE" ? "機車排氣量" : "引擎排氣量"}</dt><dd>{motorcycle.displacementCc ? `${motorcycle.displacementCc} c.c.` : "未確認"}</dd></div>
         <div><dt>車牌</dt><dd>{motorcycle.plateNumber ?? "未確認"}</dd></div>
       </dl>
 

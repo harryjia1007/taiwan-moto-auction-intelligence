@@ -206,12 +206,13 @@ class DatabaseRepository:
             cur.execute(
                 """
                 insert into lots
-                (auction_event_id,lot_number,title,lot_size,bulk_lot,eligibility,vehicle_category,storage_location,original_description,fee_notes,
+                (auction_event_id,lot_number,title,lot_size,bulk_lot,eligibility,vehicle_type,vehicle_category,car_category,storage_location,original_description,fee_notes,
                  registration_status,has_key,can_start,can_test,condition_summary,completeness,completeness_groups)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                 on conflict (auction_event_id,(coalesce(lot_number,''))) do update
                 set title=excluded.title,lot_size=excluded.lot_size,bulk_lot=excluded.bulk_lot,
-                    eligibility=excluded.eligibility,vehicle_category=excluded.vehicle_category,storage_location=excluded.storage_location,
+                    eligibility=excluded.eligibility,vehicle_type=excluded.vehicle_type,vehicle_category=excluded.vehicle_category,
+                    car_category=excluded.car_category,storage_location=excluded.storage_location,
                     original_description=excluded.original_description,fee_notes=excluded.fee_notes,
                     registration_status=excluded.registration_status,has_key=excluded.has_key,
                     can_start=excluded.can_start,can_test=excluded.can_test,
@@ -219,7 +220,8 @@ class DatabaseRepository:
                     completeness_groups=excluded.completeness_groups
                 returning id
                 """,
-                (event_id, "1", record.title, record.lot_size, record.bulk_lot, record.eligibility.value, record.vehicle_class.value,
+                (event_id, "1", record.title, record.lot_size, record.bulk_lot, record.eligibility.value,
+                 record.vehicle_type.value, record.vehicle_class.value, record.car_category.value,
                  record.location, record.description, record.fee_notes, record.registration_status.value,
                  record.has_key.value, record.can_start.value, record.can_test.value,
                  record.condition_summary, record.completeness, _json(record.completeness_groups)),
@@ -269,13 +271,14 @@ class DatabaseRepository:
             cur.execute(
                 """
                 insert into vehicles
-                (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_category,manufacture_year,manufacture_month,
+                (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_type,vehicle_category,car_category,manufacture_year,manufacture_month,
                  displacement_cc,color,mileage_km,has_key,can_start,can_test,registration_status,condition_summary,visible_damage,
                  tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                 on conflict (lot_id,source_vehicle_key) do update set
                  brand_id=excluded.brand_id,model_id=excluded.model_id,original_brand=excluded.original_brand,original_model=excluded.original_model,
-                 vehicle_category=excluded.vehicle_category,manufacture_year=excluded.manufacture_year,manufacture_month=excluded.manufacture_month,displacement_cc=excluded.displacement_cc,
+                 vehicle_type=excluded.vehicle_type,vehicle_category=excluded.vehicle_category,car_category=excluded.car_category,
+                 manufacture_year=excluded.manufacture_year,manufacture_month=excluded.manufacture_month,displacement_cc=excluded.displacement_cc,
                  color=excluded.color,mileage_km=excluded.mileage_km,has_key=excluded.has_key,can_start=excluded.can_start,can_test=excluded.can_test,
                  registration_status=excluded.registration_status,condition_summary=excluded.condition_summary,visible_damage=excluded.visible_damage,
                  tax_arrears=excluded.tax_arrears,fine_arrears=excluded.fine_arrears,fuel_fee_arrears=excluded.fuel_fee_arrears,
@@ -283,7 +286,8 @@ class DatabaseRepository:
                 returning id
                 """,
                 (lot_id, record.vehicle_units[0].source_vehicle_key if record.vehicle_units else "primary",
-                 brand_id, model_id, record.brand, record.model, record.model, record.vehicle_class.value, record.manufacture_year, record.manufacture_month,
+                 brand_id, model_id, record.brand, record.model, record.model, record.vehicle_type.value,
+                 record.vehicle_class.value, record.car_category.value, record.manufacture_year, record.manufacture_month,
                  record.displacement_cc, record.color, record.mileage_km, record.has_key.value, record.can_start.value, record.can_test.value,
                  record.registration_status.value, record.condition_summary, record.visible_damage, record.tax_arrears.value,
                  record.fine_arrears.value, record.fuel_fee_arrears.value, record.completeness, _json(record.completeness_groups)),
@@ -301,13 +305,14 @@ class DatabaseRepository:
                 cur.execute(
                     """
                     insert into vehicles
-                    (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_category,manufacture_year,manufacture_month,
+                    (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_type,vehicle_category,car_category,manufacture_year,manufacture_month,
                      displacement_cc,color,mileage_km,has_key,can_start,can_test,registration_status,condition_summary,visible_damage,
                      tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups)
-                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                     on conflict (lot_id,source_vehicle_key) do update set updated_at=now() returning id
                     """,
-                    (lot_id, unit.source_vehicle_key, brand_id, model_id, record.brand, record.model, record.model, record.vehicle_class.value,
+                    (lot_id, unit.source_vehicle_key, brand_id, model_id, record.brand, record.model, record.model,
+                     record.vehicle_type.value, record.vehicle_class.value, record.car_category.value,
                      record.manufacture_year, record.manufacture_month, record.displacement_cc, record.color, record.mileage_km,
                      record.has_key.value, record.can_start.value, record.can_test.value, record.registration_status.value,
                      record.condition_summary, record.visible_damage, record.tax_arrears.value, record.fine_arrears.value,

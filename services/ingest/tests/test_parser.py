@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from ingest.models import BidEligibility, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass
-from ingest.parser import motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime
+from ingest.models import BidEligibility, CarCategory, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass, VehicleType
+from ingest.parser import car_category_from_official_text, motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime, vehicle_type_from_official_text
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -62,6 +62,24 @@ def test_judicial_compact_roc_date_conversion() -> None:
 )
 def test_motorcycle_class_requires_explicit_official_wording(official_text: str, expected: VehicleClass) -> None:
     assert motorcycle_class_from_official_text(official_text)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("official_text", "expected"),
+    [
+        ("普通重型機車一輛", VehicleType.MOTORCYCLE),
+        ("自用小客車一輛", VehicleType.CAR),
+        ("汽車一輛、機車一輛", VehicleType.MIXED),
+        ("機車過戶前應繳清汽車燃料使用費", VehicleType.MOTORCYCLE),
+    ],
+)
+def test_vehicle_type_uses_explicit_official_wording(official_text: str, expected: VehicleType) -> None:
+    assert vehicle_type_from_official_text(official_text)[0] == expected
+
+
+def test_car_category_is_kept_separate_from_motorcycle_class() -> None:
+    assert car_category_from_official_text("自用小客車一輛")[0] == CarCategory.PASSENGER
+    assert car_category_from_official_text("大貨車一輛")[0] == CarCategory.TRUCK
 
 
 def test_judicial_structured_record_preserves_unknown_price_and_exact_identity() -> None:
@@ -193,6 +211,7 @@ def test_judicial_separable_multi_motorcycle_lot_preserves_each_plate() -> None:
 
 def test_single_motorcycle_preserves_unknown_semantics() -> None:
     record = parse_shwoo_detail(item(), artifact("shwoo_single.html"))
+    assert record.vehicle_type == VehicleType.MOTORCYCLE
     assert record.official_case_number == "115Y431240018"
     assert record.brand == "三陽牌"
     assert record.model == "HM12VB"
@@ -250,7 +269,8 @@ def test_pcc_impounded_batch_preserves_count_and_origin() -> None:
     source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=70020257"
     record = parse_pcc_detail(pcc_item("70020257", "逾期未領回汽機車"), source)
     assert record.disposal_origin == "IMPOUNDED_UNCLAIMED"
-    assert record.lot_size == 4
+    assert record.vehicle_type == VehicleType.MIXED
+    assert record.lot_size == 11
     assert record.bulk_lot is True
     assert record.reserve_price == 134000
     assert record.deposit == 2500

@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ingest.models import ParsedAuctionRecord
+from ingest.models import ParsedAuctionRecord, VehicleClass, VehicleType
 
 
 def public_listing_payload(
@@ -34,7 +34,17 @@ def public_listing_payload(
     # Legal boilerplate frequently says 「汽車燃料使用費」 even for a single
     # motorcycle. Only explicit non-motorcycle vehicle nouns make this mixed.
     explicit_car = re.search(r"(?:自用|營業)?(?:小客|大客|小貨|大貨|客貨兩用)車|汽車\s*\d+\s*[輛台部]", vehicle_text)
-    mixed_vehicle_lot = bool(explicit_car and "機車" in vehicle_text)
+    mixed_vehicle_lot = record.vehicle_type == VehicleType.MIXED or bool(explicit_car and "機車" in vehicle_text)
+    if mixed_vehicle_lot:
+        public_vehicle_type = VehicleType.MIXED.value
+    elif record.vehicle_type != VehicleType.UNKNOWN:
+        public_vehicle_type = record.vehicle_type.value
+    elif record.vehicle_class != VehicleClass.UNKNOWN or "機車" in vehicle_text:
+        public_vehicle_type = VehicleType.MOTORCYCLE.value
+    elif explicit_car:
+        public_vehicle_type = VehicleType.CAR.value
+    else:
+        public_vehicle_type = VehicleType.UNKNOWN.value
     state_labels = {
         "YES": "是", "NO": "否", "UNKNOWN": "未確認", "CONFLICTING": "資訊衝突",
     }
@@ -64,7 +74,9 @@ def public_listing_payload(
         "deposit": record.deposit,
         "eligibility": record.eligibility.value,
         "registration_status": record.registration_status.value,
+        "vehicle_type": public_vehicle_type,
         "vehicle_category": "UNKNOWN" if mixed_vehicle_lot else record.vehicle_class.value,
+        "car_category": "UNKNOWN" if mixed_vehicle_lot else record.car_category.value,
         "brand_name": None if mixed_vehicle_lot else record.brand,
         "model_name": None if mixed_vehicle_lot else record.model,
         "manufacture_year": record.manufacture_year,

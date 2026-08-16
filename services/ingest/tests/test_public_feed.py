@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from ingest.models import AuctionStatus, ParsedAuctionRecord, VehicleIdentifier
+from ingest.models import AuctionStatus, CarCategory, ParsedAuctionRecord, VehicleIdentifier, VehicleType
 from ingest.public_feed import public_listing_payload
 
 
@@ -47,6 +47,7 @@ def test_public_feed_does_not_copy_description_or_mixed_car_specs():
     payload = public_listing_payload(item)
     assert payload["description"] is None
     assert payload["condition_summary"] == "有無鑰匙：未確認；能否發動：未確認；能否測試：未確認"
+    assert payload["vehicle_type"] == "MIXED"
     assert payload["bulk_lot"] is True
     assert payload["brand_name"] is None
     assert payload["displacement_cc"] is None
@@ -72,3 +73,16 @@ def test_motorcycle_fee_boilerplate_does_not_create_a_mixed_vehicle_lot():
     assert payload["bulk_lot"] is False
     assert payload["brand_name"] == "SYM"
     assert payload["displacement_cc"] == 158
+
+
+def test_public_feed_exposes_explicit_car_family_and_category():
+    item = record(
+        official_title="自用小客車拍賣公告", vehicle_type=VehicleType.CAR,
+        car_category=CarCategory.PASSENGER, brand="TOYOTA", model="ALTIS", displacement_cc=1798,
+    )
+    payload = public_listing_payload(item, source_adapter="moj_auction", source_name="法務部查扣物集中拍賣")
+
+    assert payload["vehicle_type"] == "CAR"
+    assert payload["car_category"] == "PASSENGER"
+    assert payload["vehicle_category"] == "UNKNOWN"
+    assert payload["brand_name"] == "TOYOTA"

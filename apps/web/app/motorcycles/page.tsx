@@ -19,7 +19,7 @@ function tabHref(params: PageSearchParams, view: NonNullable<MotorcycleFilters["
 const viewCopy = {
   active: { label: "進行中", title: "目前仍可參與的拍賣", empty: "目前沒有符合條件且仍可參與的案件。" },
   ended: { label: "已結束紀錄", title: "已截止與歷史拍賣", empty: "目前沒有符合條件的歷史案件。" },
-  favorites: { label: "我的收藏", title: "你收藏的機車", empty: "還沒有收藏符合條件的車輛。" },
+  favorites: { label: "我的收藏", title: "你收藏的車輛", empty: "還沒有收藏符合條件的車輛。" },
   scrap: { label: "報廢／回收專區", title: "報廢與回收商限定標售", empty: "目前沒有符合條件的報廢或回收商限定案件。" },
   all: { label: "全部紀錄", title: "全部拍賣紀錄", empty: "沒有符合條件的案件。" },
 } as const;
@@ -43,7 +43,7 @@ export default async function MotorcyclesPage({ searchParams }: { searchParams: 
   const copy = viewCopy[view];
   return <main className="page marketplace-page"><div className="container">{viewer.fixture && <aside className="fixture-banner" role="status"><strong>私人開發展示資料</strong><span>目前筆數不代表全臺完整即時覆蓋；報廢與回收商限定案件已固定移到獨立專區。</span></aside>}
     <section className="market-launch">
-      <div className="launch-copy"><div className="eyebrow">私人機車拍賣情報</div><h1>今天想找什麼機車？</h1><p>先確認誰能買、能不能上路，再比較價格與截止時間。所有判斷都能回到官方證據。</p></div>
+      <div className="launch-copy"><div className="eyebrow">私人汽機車拍賣情報</div><h1>今天想找什麼車？</h1><p>先選汽車或機車，再確認誰能買、能不能上路，並比較價格與截止時間。所有判斷都能回到官方證據。</p></div>
       <div className="launch-summary" aria-label="目前瀏覽摘要">
         <div><strong>{total}</strong><span>{copy.label}案件</span></div>
         <ul><li><ShieldCheck size={15}/> 資格與領牌先看</li><li><TimerReset size={15}/> {sortCopy[filters.sort ?? "auction_asc"]}</li></ul>
@@ -58,7 +58,7 @@ export default async function MotorcyclesPage({ searchParams }: { searchParams: 
     </nav>
     <FilterPanel queryString={cleanQuery.toString()} total={total} />
     <div className="result-bar"><div><span className="result-kicker">搜尋結果</span><strong>{copy.title}</strong><span>{total} 筆符合條件</span></div><span className="result-note">{sortCopy[filters.sort ?? "auction_asc"]} · 截止不等於成交</span></div>
-    {items.length ? <section className="grid" aria-label="機車拍賣結果">{items.map((item)=><MotorcycleCard key={item.id} motorcycle={item} />)}</section> : <section className="empty"><h2>{copy.empty}</h2><p className="muted">可以清除部分篩選條件，或查看其他案件狀態。新的官方資料會在後續同步後出現。</p><Link className="button" href={`/motorcycles?view=${view}`}>清除篩選</Link></section>}
+    {items.length ? <section className="grid" aria-label="汽機車拍賣結果">{items.map((item)=><MotorcycleCard key={item.id} motorcycle={item} />)}</section> : <section className="empty"><h2>{copy.empty}</h2><p className="muted">可以清除部分篩選條件，或查看其他案件狀態。新的官方資料會在後續同步後出現。</p><Link className="button" href={`/motorcycles?view=${view}`}>清除篩選</Link></section>}
     {items.length > 0 && <div className="market-end"><span>所有資料都應以投標當下的官方公告為準</span><Link href="/sources">查看來源健康狀態 <ArrowRight size={15}/></Link></div>}
   </div></main>;
 }

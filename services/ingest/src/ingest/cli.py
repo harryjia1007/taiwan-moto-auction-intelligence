@@ -18,7 +18,7 @@ from ingest.public_publisher import SupabasePublicPublisher
 from ingest.storage import LocalArtifactStorage, SupabaseArtifactStorage
 from ingest.source_policy import AccessDecision, policy_for, require_live_access
 
-app = typer.Typer(no_args_is_help=True, help="Read-only official motorcycle auction ingestion")
+app = typer.Typer(no_args_is_help=True, help="Read-only official car and motorcycle auction ingestion")
 
 PUBLIC_AUTOMATED_SOURCES = {
     "shwoo": "臺北惜物網",
@@ -51,7 +51,7 @@ def load_enforcement_manifest(path: Path) -> list[DiscoveredItem]:
             raise typer.BadParameter(f"Manifest row {index + 1} must use an official /Detail/Chattel?NO= URL")
         title = str(row.get("title") or "").strip()
         if not title:
-            raise typer.BadParameter(f"Manifest row {index + 1} requires the official motorcycle title/summary")
+            raise typer.BadParameter(f"Manifest row {index + 1} requires the official vehicle title/summary")
         metadata = {key: row[key] for key in ("organization", "auction_round") if row.get(key) not in (None, "")}
         items.append(DiscoveredItem(
             source_record_id=no_values[0], official_url=official_url, title=title,

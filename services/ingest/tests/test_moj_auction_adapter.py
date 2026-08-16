@@ -33,12 +33,13 @@ async def test_moj_central_discovery_fetch_and_parse() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
         adapter = MojAuctionAdapter(client=client, request_interval=0)
         items = await adapter.discover()
-        assert [item.source_record_id for item in items] == ["90001"]
+        assert [item.source_record_id for item in items] == ["90001", "90002"]
         artifacts = await adapter.fetch(items[0])
         parsed = await adapter.parse(items[0], artifacts)
 
     assert {artifact.mime_type for artifact in artifacts} == {"text/html", "application/pdf", "application/x-zip-compressed", "image/jpeg"}
     assert parsed.vehicle_class == "ORDINARY_HEAVY"
+    assert parsed.vehicle_type == "MOTORCYCLE"
     assert parsed.disposal_origin == "CRIMINAL_SEIZURE_OR_FORFEITURE"
     assert parsed.identifiers[0].normalized_value == "TST3001"
     assert len(parsed.photo_urls) == 1
@@ -68,7 +69,7 @@ async def test_redirect_is_validated_before_contacting_legacy_host() -> None:
     assert contacted == ["https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564"]
 
 
-def test_mixed_vehicle_notice_keeps_only_explicit_motorcycle_identity() -> None:
+def test_mixed_vehicle_notice_is_retained_without_inventing_one_vehicle_class() -> None:
     content = (FIXTURES / "moj_auction_mixed_detail.html").read_bytes()
     url = "https://auction.moj.gov.tw/1724/1726/90003/post"
     item = DiscoveredItem(
@@ -88,7 +89,31 @@ def test_mixed_vehicle_notice_keeps_only_explicit_motorcycle_identity() -> None:
 
     parsed = parse_moj_auction_detail(item, [artifact])
 
-    assert parsed.vehicle_class == "LARGE_HEAVY"
-    assert [identifier.normalized_value for identifier in parsed.identifiers] == ["TST2001"]
-    assert parsed.lot_size == 1
-    assert parsed.vehicle_units == []
+    assert parsed.vehicle_type == "MIXED"
+    assert parsed.vehicle_class == "UNKNOWN"
+    assert parsed.brand is None
+    assert parsed.bulk_lot is True
+
+
+def test_car_notice_is_parsed_as_car_without_motorcycle_class() -> None:
+    content = """
+      <html><head><meta name="DC.Creator" content="臺灣高雄地方檢察署"></head><body>
+      <h2 class="title">自用小客車拍賣公告</h2><section class="cp">
+      自用小客車 1 輛，車牌 ABC-1234，廠牌：TOYOTA，型號：ALTIS，排氣量：1798cc。
+      拍賣時間：115/08/28 10:00，可辦理移轉過戶，有鑰匙。
+      </section></body></html>
+    """.encode()
+    url = "https://auction.moj.gov.tw/1724/1726/90002/post"
+    item = DiscoveredItem(source_record_id="90002", official_url=url, discovery_url=MojAuctionAdapter.LIST_URL, title="自用小客車拍賣公告")
+    artifact = RawArtifact(
+        official_url=url, fetched_at=datetime.now(UTC), mime_type="text/html", filename="post",
+        content=content, checksum_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+    parsed = parse_moj_auction_detail(item, [artifact])
+
+    assert parsed.vehicle_type == "CAR"
+    assert parsed.car_category == "PASSENGER"
+    assert parsed.vehicle_class == "UNKNOWN"
+    assert parsed.displacement_cc == 1798
+    assert parsed.identifiers[0].normalized_value == "ABC1234"

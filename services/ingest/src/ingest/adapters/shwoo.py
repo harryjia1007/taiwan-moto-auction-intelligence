@@ -24,6 +24,7 @@ class ShwooAdapter(SourceAdapter):
     KEYWORDS = (
         "機車", "機器腳踏車", "普通輕型機車", "普通重型機車",
         "大型重型機車", "重型機車", "重機", "電動機車", "汽機車",
+        "汽車", "小客車", "貨車", "客貨兩用車", "休旅車", "轎車", "廂型車",
     )
     MAX_BYTES = 25 * 1024 * 1024
     ALLOWED_MIME = ("text/html", "image/jpeg", "image/png", "image/webp")

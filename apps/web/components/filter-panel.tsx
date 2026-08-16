@@ -10,7 +10,7 @@ function quickHref(view: string, query = "") {
 
 const filterLabels: Record<string, string> = {
   keyword: "關鍵字", county: "地區", source: "來源", origin: "處分性質", brand: "廠牌",
-  vehicleClass: "機車級別", eligibility: "投標資格", registration: "領牌狀態", price: "價格",
+  vehicleType: "車輛類型", vehicleClass: "機車級別", carCategory: "汽車類別", eligibility: "投標資格", registration: "領牌狀態", price: "價格",
   hasPhotos: "有官方照片", singleVehicle: "單台標售", within: "截止時間", sort: "排序", cc: "排氣量",
 };
 
@@ -23,6 +23,8 @@ const sourceLabels: Record<string, string> = {
   judicial: "司法院地院法拍", moj_auction: "法務部查扣物拍賣", moj_enforcement: "行政執行署拍賣",
   pcc: "政府採購網變賣", shwoo: "臺北惜物網",
 };
+const vehicleTypeLabels: Record<string, string> = { MOTORCYCLE: "機車", CAR: "汽車", MIXED: "汽機車混合批次", UNKNOWN: "車種未確認" };
+const carCategoryLabels: Record<string, string> = { PASSENGER: "小客車／轎車", SUV: "休旅車", VAN: "廂型／客貨車", TRUCK: "貨車", BUS: "大客車／遊覽車", OTHER: "其他汽車", UNKNOWN: "汽車類別未確認" };
 
 const sortLabels: Record<string, string> = {
   auction_asc: "截止最近", auction_desc: "截止最晚", price_asc: "價格低到高",
@@ -32,6 +34,8 @@ const sortLabels: Record<string, string> = {
 function filterValue(key: string, value: string) {
   if (key === "source") return sourceLabels[value] ?? value;
   if (key === "origin") return disposalOriginLabels[value as keyof typeof disposalOriginLabels] ?? value;
+  if (key === "vehicleType") return vehicleTypeLabels[value] ?? value;
+  if (key === "carCategory") return carCategoryLabels[value] ?? value;
   if (key === "vehicleClass") return motorcycleClassLabels[value as keyof typeof motorcycleClassLabels] ?? value;
   if (key === "eligibility") return eligibilityLabels[value as keyof typeof eligibilityLabels] ?? value;
   if (key === "registration") return registrationLabels[value as keyof typeof registrationLabels] ?? value;
@@ -60,15 +64,15 @@ export function FilterPanel({ queryString, total }: { queryString: string; total
   const values = Object.fromEntries(query.entries()) as Record<string, string | undefined>;
   const ccValues = query.getAll("cc");
   const view = values.view ?? "active";
-  const refinementKeys = ["county","source","origin","brand","vehicleClass","eligibility","registration","price","hasPhotos","singleVehicle","within"];
-  const advancedKeys = ["origin","brand","vehicleClass","cc","eligibility","registration","price","hasPhotos","singleVehicle"];
+  const refinementKeys = ["vehicleType","county","source","origin","brand","vehicleClass","carCategory","eligibility","registration","price","hasPhotos","singleVehicle","within"];
+  const advancedKeys = ["origin","brand","vehicleClass","carCategory","cc","eligibility","registration","price","hasPhotos","singleVehicle"];
   const activeCount = refinementKeys.filter((key) => Boolean(values[key])).length + ccValues.length + (values.keyword ? 1 : 0);
   const advancedCount = advancedKeys.filter((key) => Boolean(values[key])).length;
   const refinementOpen = advancedCount > 0 || ccValues.length > 0;
   const activeFilters = ["keyword", ...refinementKeys, ...(values.sort && values.sort !== "auction_asc" ? ["sort"] : [])]
     .filter((key, index, keys) => keys.indexOf(key) === index && Boolean(values[key]));
   const viewLabel = ({ active: "進行中", ended: "已結束", favorites: "我的收藏", scrap: "報廢／回收", all: "全部紀錄" } as Record<string,string>)[view] ?? "進行中";
-  const summaryParts = [viewLabel, values.within ? `${values.within} 天內` : null, values.vehicleClass ? motorcycleClassLabels[values.vehicleClass as keyof typeof motorcycleClassLabels] : null, ...ccValues.map((value) => ccLabels[value]), `共 ${total} 筆`].filter(Boolean);
+  const summaryParts = [viewLabel, values.vehicleType ? vehicleTypeLabels[values.vehicleType] : "全部車輛", values.within ? `${values.within} 天內` : null, values.vehicleClass ? motorcycleClassLabels[values.vehicleClass as keyof typeof motorcycleClassLabels] : null, values.carCategory ? carCategoryLabels[values.carCategory] : null, ...ccValues.map((value) => ccLabels[value]), `共 ${total} 筆`].filter(Boolean);
   return <section className="filter-panel" aria-label="拍賣篩選">
     <div className="filter-summary" role="status" aria-label="目前瀏覽條件"><span>目前瀏覽</span><strong>{summaryParts.join("・")}</strong><small>{activeCount ? `已套用 ${activeCount} 個條件` : "尚未套用精準條件"}</small></div>
     <div className="filter-heading">
@@ -89,6 +93,7 @@ export function FilterPanel({ queryString, total }: { queryString: string; total
         <Link href={quickHref(view, "&within=7")}><span><CalendarClock size={18}/></span><div><strong>7 天內截止</strong><small>掌握近期機會</small></div></Link>
       </div>
       <div className="core-refinements always-visible">
+        <label><span>車輛類型</span><select className="select" name="vehicleType" defaultValue={values.vehicleType ?? ""} aria-label="車輛類型"><option value="">全部車輛</option><option value="MOTORCYCLE">機車</option><option value="CAR">汽車</option><option value="MIXED">汽機車混合批次</option><option value="UNKNOWN">車種未確認</option></select></label>
         <label><span>地區</span><select className="select" name="county" defaultValue={values.county ?? ""} aria-label="地區"><option value="">全臺灣</option>{counties.map((value)=><option key={value}>{value}</option>)}</select></label>
         <label><span>官方來源</span><select className="select" name="source" defaultValue={values.source ?? ""} aria-label="資料來源"><option value="">全部官方來源</option><option value="judicial">司法院地院法拍</option><option value="moj_auction">法務部查扣物拍賣</option><option value="moj_enforcement">行政執行署拍賣</option><option value="pcc">政府採購網變賣</option><option value="shwoo">臺北惜物網</option></select></label>
         <label><span>拍賣時間</span><select className="select" name="within" defaultValue={values.within ?? ""} aria-label="拍賣時間範圍" disabled={view === "ended"}><option value="">不限</option><option value="3">3 天內</option><option value="7">7 天內</option><option value="14">14 天內</option><option value="30">30 天內</option></select></label>
@@ -102,6 +107,7 @@ export function FilterPanel({ queryString, total }: { queryString: string; total
           <label><span>處分性質</span><select className="select" name="origin" defaultValue={values.origin ?? ""} aria-label="處分性質"><option value="">不限</option><option value="JUDICIAL_EXECUTION">司法強制執行法拍</option><option value="ADMINISTRATIVE_ENFORCEMENT">行政執行拍賣</option><option value="PUBLIC_ASSET_DISPOSAL">公有財產變賣</option><option value="SCRAP_DISPOSAL">公務報廢財物</option><option value="IMPOUNDED_UNCLAIMED">移置保管逾期未領</option><option value="CRIMINAL_SEIZURE_OR_FORFEITURE">刑事扣押／沒收</option><option value="CUSTOMS_FORFEITURE">海關沒入／拍賣</option></select></label>
           <label><span>廠牌</span><select className="select" name="brand" defaultValue={values.brand ?? ""} aria-label="廠牌"><option value="">不限</option>{["SYM","KYMCO","YAMAHA","HONDA","SUZUKI","PGO","GOGORO"].map((value)=><option key={value}>{value}</option>)}</select></label>
           <label><span>機車級別</span><select className="select" name="vehicleClass" defaultValue={values.vehicleClass ?? ""} aria-label="機車級別"><option value="">全部級別</option><option value="ORDINARY_LIGHT">普通輕型</option><option value="ORDINARY_HEAVY">普通重型</option><option value="LARGE_HEAVY">大型重型</option><option value="ELECTRIC_MOTORCYCLE">電動機車</option><option value="HEAVY_UNSPECIFIED">重型（級別未明）</option><option value="UNKNOWN">級別未確認</option></select></label>
+          <label><span>汽車類別</span><select className="select" name="carCategory" defaultValue={values.carCategory ?? ""} aria-label="汽車類別"><option value="">全部汽車類別</option><option value="PASSENGER">小客車／轎車</option><option value="SUV">休旅車</option><option value="VAN">廂型／客貨車</option><option value="TRUCK">貨車</option><option value="BUS">大客車／遊覽車</option><option value="OTHER">其他汽車</option><option value="UNKNOWN">類別未確認</option></select></label>
           <fieldset className="cc-filter"><legend>排氣量（可複選）</legend>{Object.entries(ccLabels).map(([value,label])=><label key={value}><input type="checkbox" name="cc" value={value} defaultChecked={ccValues.includes(value)}/>{label}</label>)}<small>排氣量只用於篩選，不會推定法定機車級別。</small></fieldset>
           <label><span>投標資格</span><select className="select" name="eligibility" defaultValue={values.eligibility ?? ""} aria-label="投標資格"><option value="">不限</option><option value="NATURAL_PERSON_ALLOWED">一般民眾可投標</option><option value="LICENSED_RECYCLER_ONLY">限合格回收商</option><option value="UNKNOWN">資格未確認</option></select></label>
           <label><span>領牌狀態</span><select className="select" name="registration" defaultValue={values.registration ?? ""} aria-label="牌照狀態"><option value="">不限</option><option value="NORMAL_TRANSFER">可正常過戶</option><option value="RE_REGISTRATION_REQUIRED">需重新領牌</option><option value="INSPECTION_REQUIRED">需檢驗／認證</option><option value="SCRAP_ONLY">僅供報廢</option><option value="UNKNOWN">未確認</option></select></label>

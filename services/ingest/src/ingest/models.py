@@ -45,6 +45,23 @@ class VehicleClass(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class VehicleType(StrEnum):
+    MOTORCYCLE = "MOTORCYCLE"
+    CAR = "CAR"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
+class CarCategory(StrEnum):
+    PASSENGER = "PASSENGER"
+    SUV = "SUV"
+    VAN = "VAN"
+    TRUCK = "TRUCK"
+    BUS = "BUS"
+    OTHER = "OTHER"
+    UNKNOWN = "UNKNOWN"
+
+
 class AuctionStatus(StrEnum):
     DISCOVERED = "DISCOVERED"
     ANNOUNCED = "ANNOUNCED"
@@ -128,7 +145,9 @@ class ParsedAuctionRecord(BaseModel):
     manufacture_year: int | None = None
     manufacture_month: int | None = None
     displacement_cc: int | None = None
+    vehicle_type: VehicleType = VehicleType.UNKNOWN
     vehicle_class: VehicleClass = VehicleClass.UNKNOWN
+    car_category: CarCategory = CarCategory.UNKNOWN
     color: str | None = None
     mileage_km: int | None = None
     has_key: FourState = FourState.UNKNOWN

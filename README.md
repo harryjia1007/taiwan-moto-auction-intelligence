@@ -1,12 +1,12 @@
-# Taiwan Moto Auction Intelligence
+# Taiwan Vehicle Auction Intelligence
 
 [![CI](https://github.com/harryjia1007/taiwan-moto-auction-intelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/harryjia1007/taiwan-moto-auction-intelligence/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/harryjia1007/taiwan-moto-auction-intelligence/actions/workflows/codeql.yml/badge.svg)](https://github.com/harryjia1007/taiwan-moto-auction-intelligence/actions/workflows/codeql.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-把分散在臺灣政府網站與官方文件中的機車拍賣資訊，整理成可搜尋、可追溯、可重現的開源資料管線與唯讀儀表板。
+把分散在臺灣政府網站與官方文件中的汽車、機車拍賣資訊，整理成可搜尋、可追溯、可重現的開源資料管線與唯讀儀表板。
 
-The project turns fragmented Taiwanese public-sector motorcycle-auction notices into a searchable, evidence-preserving dataset. It is designed for buyers, civic technologists, journalists, and researchers who need to trace every normalized fact back to an official source.
+The project turns fragmented Taiwanese public-sector car-and-motorcycle auction notices into a searchable, evidence-preserving dataset. It is designed for buyers, civic technologists, journalists, and researchers who need to trace every normalized fact back to an official source.
 
 > **Project status:** private pre-1.0 system with a separate synthetic public Demo. Only Shwoo and the MOJ centralized portal are eligible for unattended schedules; Judicial records require a human-reviewed official PDF manifest and Government e-Procurement is paused for authorization review. Code presence never implies authorized or active coverage.
 

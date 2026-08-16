@@ -1,8 +1,10 @@
 import {
   BID_ELIGIBILITIES,
+  CAR_CATEGORIES,
   DISPOSAL_ORIGINS,
   MOTORCYCLE_CLASSES,
   REGISTRATION_STATUSES,
+  VEHICLE_TYPES,
   displacementBandFromQuery,
   type MotorcycleFilters,
 } from "@tm-ai/shared";
@@ -17,6 +19,8 @@ const ORIGINS = new Set<string>(DISPOSAL_ORIGINS);
 const ELIGIBILITIES = new Set<string>(BID_ELIGIBILITIES);
 const REGISTRATIONS = new Set<string>(REGISTRATION_STATUSES);
 const CLASSES = new Set<string>(MOTORCYCLE_CLASSES);
+const VEHICLE_KINDS = new Set<string>(VEHICLE_TYPES);
+const CAR_KINDS = new Set<string>(CAR_CATEGORIES);
 
 function selected(value: string | null, allowed: Set<string>) {
   return value && allowed.has(value) ? value : undefined;
@@ -58,6 +62,8 @@ export function parseMarketplaceQuery(query: URLSearchParams): {
     eligibility: selected(query.get("eligibility"), ELIGIBILITIES) as MotorcycleFilters["eligibility"],
     registration: selected(query.get("registration"), REGISTRATIONS) as MotorcycleFilters["registration"],
     vehicleClass: selected(query.get("vehicleClass"), CLASSES) as MotorcycleFilters["vehicleClass"],
+    vehicleType: selected(query.get("vehicleType"), VEHICLE_KINDS) as MotorcycleFilters["vehicleType"],
+    carCategory: selected(query.get("carCategory"), CAR_KINDS) as MotorcycleFilters["carCategory"],
     displacementBands: displacementBands.length ? displacementBands : undefined,
     hasPhotos: query.get("hasPhotos") === "true",
     singleVehicle: query.get("singleVehicle") === "true",
@@ -68,6 +74,20 @@ export function parseMarketplaceQuery(query: URLSearchParams): {
     marketView,
     sort,
   };
+  if (filters.carCategory) {
+    filters.vehicleType = "CAR";
+    filters.vehicleClass = undefined;
+    filters.displacementBands = undefined;
+  } else if (filters.vehicleClass || filters.displacementBands?.length) {
+    filters.vehicleType = "MOTORCYCLE";
+  } else if (filters.vehicleType === "CAR") {
+    filters.vehicleClass = undefined;
+    filters.displacementBands = undefined;
+  } else if (filters.vehicleType !== "MOTORCYCLE") {
+    filters.vehicleClass = undefined;
+    filters.carCategory = undefined;
+    filters.displacementBands = undefined;
+  }
   return {
     filters,
     limit: Math.min(Math.max(Number(query.get("limit")) || 24, 1), 100),
@@ -86,7 +106,9 @@ export function sanitizedMarketplaceQuery(query: URLSearchParams): URLSearchPara
   if (parsed.disposalOrigin) clean.set("origin", parsed.disposalOrigin);
   if (parsed.brand) clean.set("brand", parsed.brand);
   if (parsed.vehicleClass) clean.set("vehicleClass", parsed.vehicleClass);
-  for (const raw of query.getAll("cc")) for (const part of raw.split(",")) if (displacementBandFromQuery(part)) clean.append("cc", part);
+  if (parsed.vehicleType) clean.set("vehicleType", parsed.vehicleType);
+  if (parsed.carCategory) clean.set("carCategory", parsed.carCategory);
+  if (parsed.displacementBands?.length) for (const raw of query.getAll("cc")) for (const part of raw.split(",")) if (displacementBandFromQuery(part)) clean.append("cc", part);
   if (parsed.eligibility) clean.set("eligibility", parsed.eligibility);
   if (parsed.registration) clean.set("registration", parsed.registration);
   if (parsed.minPrice !== undefined || parsed.maxPrice !== undefined) clean.set("price", `${parsed.minPrice ?? ""}-${parsed.maxPrice ?? ""}`);
