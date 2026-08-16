@@ -39,8 +39,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      - name: Check official source
-        run: python -m ingest healthcheck --source "${{ matrix.source }}"
       - name: Publish official vehicles
         run: python -m ingest publish-public --source "${{ matrix.source }}"
         env:

@@ -32,7 +32,10 @@ class ShwooAdapter(SourceAdapter):
     def __init__(self, client: httpx.AsyncClient | None = None, request_interval: float = 1.0) -> None:
         self.client = client or httpx.AsyncClient(
             follow_redirects=True,
-            timeout=httpx.Timeout(20),
+            # The municipal server can take longer than 20 seconds under load.
+            # Keep bounded connect/write limits while allowing a slower official
+            # HTML response to complete instead of restarting the whole run.
+            timeout=httpx.Timeout(60, connect=15, write=20, pool=20),
             headers={"User-Agent": contact_user_agent("0.4")},
         )
         self._owns_client = client is None
