@@ -51,10 +51,11 @@ values
   ('20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001','SHWOO','臺北惜物網','shwoo','PARTIAL','PUBLIC_READ_ONLY','https://shwoo.gov.taipei/shwoo/browse/browse00/','1.1.0'),
   ('20000000-0000-0000-0000-000000000002',null,'JUDICIAL','司法院 22 地院動產法拍','judicial','PARTIAL','HUMAN_OFFICIAL_MANIFEST','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm','1.3.0'),
   ('20000000-0000-0000-0000-000000000003',null,'ADMINISTRATIVE_ENFORCEMENT','行政執行署動產拍賣','moj_enforcement','PARTIAL','CAPTCHA_SAFE_MANUAL','https://www.tpkonsale.moj.gov.tw/Chattel','1.3.0'),
-  ('20000000-0000-0000-0000-000000000004',null,'PROCUREMENT','政府電子採購網財物變賣','pcc','DEGRADED','LEGAL_REVIEW_REQUIRED','https://web.pcc.gov.tw/opas/aspam/public/indexAspam','1.2.0'),
-  ('20000000-0000-0000-0000-000000000005',null,'PROSECUTORS','法務部查扣物集中拍賣','moj_auction','PARTIAL','PUBLIC_READ_ONLY','https://auction.moj.gov.tw/1724/1726/searchList','1.3.0'),
+  ('20000000-0000-0000-0000-000000000004',null,'PROCUREMENT','政府電子採購網財物變賣','pcc','PARTIAL','OFFICIAL_OPEN_DATA','https://web.pcc.gov.tw/opas/aspam/public/downloadOpenData','1.4.0'),
+  ('20000000-0000-0000-0000-000000000005',null,'PROSECUTORS','法務部查扣物集中拍賣','moj_auction','PARTIAL','PUBLIC_READ_ONLY','https://auction.moj.gov.tw/1724/1726/searchList','1.4.0'),
   ('20000000-0000-0000-0000-000000000006',null,'POLICE_TRAFFIC','警政與交通機關','police','PLANNED','PLANNED','https://www.npa.gov.tw/',''),
-  ('20000000-0000-0000-0000-000000000007',null,'CUSTOMS','海關拍賣','customs','PLANNED','PLANNED','https://web.customs.gov.tw/','')
+  ('20000000-0000-0000-0000-000000000007',null,'CUSTOMS','財政部關務署四關標售','customs','PARTIAL','PUBLIC_HTML_LINK_ONLY','https://web.customs.gov.tw/singlehtml/1207?cntId=cus1_93228_1207','1.4.0'),
+  ('20000000-0000-0000-0000-000000000008',null,'ADMINISTRATIVE_ENFORCEMENT','行政執行署各分署公告','moj_enforcement_cms','PARTIAL','BRANCH_CMS_READ_ONLY','https://www.tpk.moj.gov.tw/9539/9685/1458230/1461437/','1.4.0')
 on conflict (name) do nothing;
 
 insert into source_access_policies
@@ -63,8 +64,10 @@ values
   ('20000000-0000-0000-0000-000000000001','ALLOW','https://shwoo.gov.taipei/robots.txt','https://shwoo.gov.taipei/shwoo/newhome/newhome00/index','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-15','/shwoo/ application path is allowed; public redistribution is not enabled'),
   ('20000000-0000-0000-0000-000000000002','MANUAL_ONLY','https://aomp109.judicial.gov.tw/robots.txt','https://www.judicial.gov.tw/tw/cp-1327-84674-d8e05-1.html','OGL_V1_WITH_EXCEPTIONS','HIGH','2026-08-15','Central query automation is disallowed. Human-reviewed official PDF manifests may be imported without querying or mirroring the blocked site; former dataset 49107 was permanently withdrawn and unattended discovery awaits a replacement official feed'),
   ('20000000-0000-0000-0000-000000000003','MANUAL_ONLY','https://www.tpkonsale.moj.gov.tw/','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-15','Human CAPTCHA discovery only; validated detail manifests may be processed'),
-  ('20000000-0000-0000-0000-000000000004','REVIEW_REQUIRED','https://web.pcc.gov.tw/robots.txt','https://web.pcc.gov.tw/pis/prac/declarationClient/right','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-15','Robots endpoint does not publish a usable policy; unattended access paused pending review'),
-  ('20000000-0000-0000-0000-000000000005','ALLOW','https://auction.moj.gov.tw/robots.txt','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-15','Public portal robots policy does not disallow collection; data remains private')
+  ('20000000-0000-0000-0000-000000000004','ALLOW','https://web.pcc.gov.tw/robots.txt','https://data.gov.tw/license','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-18','ALLOW is based on official machine-readable dataset 7263 under OGDL 1.0, not an ambiguous robots response; detail matching stays on web.pcc.gov.tw HTTPS'),
+  ('20000000-0000-0000-0000-000000000005','ALLOW','https://auction.moj.gov.tw/robots.txt','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-18','ALLOW is limited to auction.moj.gov.tw. Unreviewed prosecutor-office redirect targets are not contacted; exact central list-row evidence is retained as a partial record'),
+  ('20000000-0000-0000-0000-000000000007','ALLOW','https://web.customs.gov.tw/robots.txt','https://web.customs.gov.tw/singlehtml/694','LINK_ONLY_NO_FETCH','MEDIUM','2026-08-19','Four Customs HTML announcement channels are allowed; /download/ attachments remain official outbound links and are never fetched or mirrored'),
+  ('20000000-0000-0000-0000-000000000008','ALLOW','https://www.tpy.moj.gov.tw/robots.txt','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_ARTIFACT_OFFICIAL_LINK','HIGH','2026-08-20','ALLOW is limited to 13 explicitly registered branch CMS hosts; every branch robots and declared sitemap are rechecked each run, and the CAPTCHA-gated central search remains excluded')
 on conflict (source_id) do update set
   decision=excluded.decision,robots_url=excluded.robots_url,terms_url=excluded.terms_url,
   photo_rights=excluded.photo_rights,personal_data_risk=excluded.personal_data_risk,
@@ -77,10 +80,28 @@ insert into source_endpoints (source_id, endpoint_type, url, notes) values
 ('20000000-0000-0000-0000-000000000002','DETAIL','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm','法院拍賣公告 PDF'),
 ('20000000-0000-0000-0000-000000000003','DISCOVERY','https://www.tpkonsale.moj.gov.tw/Chattel','人工完成 CAPTCHA 後匯出官方案件明細 URL'),
 ('20000000-0000-0000-0000-000000000003','DETAIL','https://www.tpkonsale.moj.gov.tw/Detail/Chattel','官方動產案件明細、公告與照片'),
-('20000000-0000-0000-0000-000000000004','DISCOVERY','https://web.pcc.gov.tw/opas/aspam/public/readAspam','全國財物變賣公開關鍵字查詢'),
+('20000000-0000-0000-0000-000000000004','DISCOVERY','https://web.pcc.gov.tw/opas/aspam/public/downloadOpenData','資料集 7263 財物變賣公告 XML；上班日每日更新'),
 ('20000000-0000-0000-0000-000000000004','DETAIL','https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld','公開財物變賣明細'),
 ('20000000-0000-0000-0000-000000000005','DISCOVERY','https://auction.moj.gov.tw/1724/1726/searchList','法務部查扣物汽機車類公開清單'),
-('20000000-0000-0000-0000-000000000005','DETAIL','https://auction.moj.gov.tw/1724/1726/','法務部查扣物公告與附件')
+('20000000-0000-0000-0000-000000000005','DETAIL','https://auction.moj.gov.tw/1724/1726/','法務部查扣物公告與附件'),
+('20000000-0000-0000-0000-000000000007','DISCOVERY','https://web.customs.gov.tw/singlehtml/1207?cntId=cus1_93228_1207','財政部關務署四關標售官方總覽'),
+('20000000-0000-0000-0000-000000000007','DISCOVERY','https://web.customs.gov.tw/keelung/multiplehtml/572','基隆關標售公告 HTML'),
+('20000000-0000-0000-0000-000000000007','DISCOVERY','https://web.customs.gov.tw/taipei/multiplehtml/120','臺北關標售公告 HTML'),
+('20000000-0000-0000-0000-000000000007','DISCOVERY','https://web.customs.gov.tw/taichung/multiplehtml/396','臺中關標售公告 HTML'),
+('20000000-0000-0000-0000-000000000007','DISCOVERY','https://web.customs.gov.tw/kaohsiung/multiplehtml/541','高雄關標售公告 HTML'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.tpy.moj.gov.tw/','臺北分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.sly.moj.gov.tw/','士林分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.pcy.moj.gov.tw/','新北分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.tyy.moj.gov.tw/','桃園分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.scy.moj.gov.tw/','新竹分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.tcy.moj.gov.tw/','臺中分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.chy.moj.gov.tw/','彰化分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.cyy.moj.gov.tw/','嘉義分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.tny.moj.gov.tw/','臺南分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.ksy.moj.gov.tw/','高雄分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.pty.moj.gov.tw/','屏東分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.hly.moj.gov.tw/','花蓮分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
+('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.ily.moj.gov.tw/','宜蘭分署官方 CMS；每次由 robots 與 sitemap 驗證入口')
 on conflict do nothing;
 
 insert into vehicle_brands (id, canonical_name, aliases) values

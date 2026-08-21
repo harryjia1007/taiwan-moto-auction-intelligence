@@ -54,6 +54,67 @@ async def test_unregistered_moj_auction_host_is_blocked() -> None:
 
 
 @pytest.mark.asyncio
+async def test_moj_url_validation_blocks_credentials_and_nonstandard_ports_before_contact() -> None:
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        contacted.append(str(request.url))
+        return httpx.Response(200, content=b"unexpected")
+
+    unsafe_urls = (
+        "https://user:password@auction.moj.gov.tw/1724/1726/searchList",
+        "https://auction.moj.gov.tw:4443/1724/1726/searchList",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        for unsafe_url in unsafe_urls:
+            with pytest.raises(ValueError, match="Blocked non-registered source URL"):
+                await adapter._request(unsafe_url)
+
+    assert contacted == []
+
+
+def test_moj_artifacts_store_only_safe_response_headers() -> None:
+    response = httpx.Response(
+        200,
+        content=b"<html><body>official evidence</body></html>",
+        headers={
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "public, max-age=60",
+            "etag": '"official-etag"',
+            "set-cookie": "session=must-not-be-persisted",
+            "authorization": "Bearer must-not-be-persisted",
+            "x-debug-token": "must-not-be-persisted",
+        },
+        request=httpx.Request("GET", "https://auction.moj.gov.tw/1724/1726/123/post"),
+    )
+    item = DiscoveredItem(
+        source_record_id="123",
+        official_url="https://auction.moj.gov.tw/1724/1726/123/post",
+        title="普通重型機車",
+        discovery_url=MojAuctionAdapter.LIST_URL,
+    )
+    artifacts = (
+        MojAuctionAdapter._artifact(response, datetime.now(UTC)),
+        MojAuctionAdapter._central_summary_artifact(
+            response,
+            item,
+            b"<tr>official row</tr>",
+            datetime.now(UTC),
+        ),
+    )
+
+    for artifact in artifacts:
+        assert artifact.http_headers["content-type"] == "text/html; charset=utf-8"
+        assert artifact.http_headers["cache-control"] == "public, max-age=60"
+        assert artifact.http_headers["etag"] == '"official-etag"'
+        assert set(artifact.http_headers) <= MojAuctionAdapter.ARTIFACT_HEADER_ALLOWLIST
+        assert "set-cookie" not in artifact.http_headers
+        assert "authorization" not in artifact.http_headers
+        assert "x-debug-token" not in artifact.http_headers
+
+
+@pytest.mark.asyncio
 async def test_redirect_is_validated_before_contacting_legacy_host() -> None:
     contacted: list[str] = []
 
@@ -67,6 +128,61 @@ async def test_redirect_is_validated_before_contacting_legacy_host() -> None:
             await adapter._request("https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564")
 
     assert contacted == ["https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564"]
+
+
+@pytest.mark.asyncio
+async def test_external_detail_keeps_exact_central_summary_without_contacting_external_host() -> None:
+    listing = (FIXTURES / "moj_auction_external_summary_list.html").read_bytes()
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        contacted.append(str(request.url))
+        if request.url.path.endswith("searchList"):
+            return httpx.Response(200, content=listing, headers={"content-type": "text/html; charset=utf-8"})
+        if request.url.path.endswith("CountAndRedirectUrl"):
+            return httpx.Response(302, headers={"location": "https://www.unreviewed.moj.gov.tw/vehicle/post"})
+        raise AssertionError(f"external host must never be contacted: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        items = await adapter.discover()
+        artifacts = await adapter.fetch(items[0])
+        parsed = await adapter.parse(items[0], artifacts)
+
+    assert contacted == [
+        "https://auction.moj.gov.tw/1724/1726/searchList?Page=1&PageSize=100&type=01",
+        "https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564",
+    ]
+    assert len(artifacts) == 1
+    assert artifacts[0].content in listing
+    assert artifacts[0].filename == "moj-auction-list-row-node-13564.html"
+    assert parsed.organization == "臺灣測試地方檢察署"
+    assert parsed.title == "普通重型機車一輛拍賣公告"
+    assert parsed.vehicle_type == "MOTORCYCLE"
+    assert parsed.description is None
+    assert "no reviewed automated-access policy" in items[0].metadata[MojAuctionAdapter.PARTIAL_FAILURE_KEY]
+    assert all(evidence.source_text.encode() in artifacts[0].content for evidence in parsed.evidence)
+
+
+@pytest.mark.asyncio
+async def test_repeated_discovery_clears_stale_central_summary_artifacts() -> None:
+    first_listing = (FIXTURES / "moj_auction_external_summary_list.html").read_bytes()
+    empty_listing = b"<html><body><table class='table_list'><tbody></tbody></table></body></html>"
+    responses = iter((first_listing, empty_listing))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("searchList")
+        return httpx.Response(200, content=next(responses), headers={"content-type": "text/html"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        first_items = await adapter.discover()
+        assert first_items[0].source_record_id in adapter._central_summary_artifacts
+
+        second_items = await adapter.discover()
+
+    assert second_items == []
+    assert adapter._central_summary_artifacts == {}
 
 
 def test_mixed_vehicle_notice_is_retained_without_inventing_one_vehicle_class() -> None:

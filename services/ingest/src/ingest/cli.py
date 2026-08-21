@@ -9,7 +9,15 @@ from urllib.parse import parse_qs, urlparse
 
 import typer
 
-from ingest.adapters import JudicialMovableAdapter, MojAuctionAdapter, MojEnforcementManualAdapter, PccAssetSaleAdapter, ShwooAdapter
+from ingest.adapters import (
+    CustomsAuctionAdapter,
+    JudicialMovableAdapter,
+    MojAuctionAdapter,
+    MojEnforcementCmsAdapter,
+    MojEnforcementManualAdapter,
+    PccAssetSaleAdapter,
+    ShwooAdapter,
+)
 from ingest.adapters.base import SourceAdapter
 from ingest import PARSER_VERSION
 from ingest.models import DiscoveredItem, SyncResult
@@ -23,7 +31,11 @@ app = typer.Typer(no_args_is_help=True, help="Read-only official car and motorcy
 PUBLIC_AUTOMATED_SOURCES = {
     "shwoo": "臺北惜物網",
     "moj_auction": "法務部查扣物集中拍賣",
+    "pcc": "政府電子採購網財物變賣",
+    "customs": "財政部關務署四關標售",
+    "moj_enforcement_cms": "行政執行署各分署公告",
 }
+PARTIAL_FAILURE_KEY = "ingest_partial_failure"
 
 
 def supabase_backend_key() -> str | None:
@@ -34,6 +46,26 @@ def supabase_backend_key() -> str | None:
 def exception_message(exc: Exception) -> str:
     """Keep run warnings useful even for exceptions with an empty string form."""
     return str(exc).strip() or exc.__class__.__name__
+
+
+def record_partial_item(result: SyncResult, item: DiscoveredItem) -> None:
+    """Expose a safely retained summary as a partial detail failure in run health."""
+    warning = str(item.metadata.get(PARTIAL_FAILURE_KEY) or "").strip()
+    if not warning:
+        return
+    result.failed += 1
+    result.warnings.append(f"{item.source_record_id}: {warning}")
+
+
+def record_discovery_warnings(result: SyncResult, adapter: SourceAdapter) -> None:
+    """Retain partial branch/list coverage instead of presenting it as zero new cases."""
+    warnings = getattr(adapter, "discovery_warnings", None)
+    if warnings is None:
+        warnings = getattr(adapter, "_discovery_warnings", [])
+    normalized = [str(warning).strip() for warning in warnings if str(warning).strip()]
+    if not normalized:
+        return
+    result.warnings.extend(normalized)
 
 
 def load_enforcement_manifest(path: Path) -> list[DiscoveredItem]:
@@ -113,7 +145,19 @@ def adapter_for(source: str, manifest: Path | None = None) -> SourceAdapter:
     if source == "moj_enforcement":
         items = load_enforcement_manifest(manifest) if manifest else []
         return MojEnforcementManualAdapter(items, request_interval=float(os.getenv("MOJ_ENFORCEMENT_REQUEST_INTERVAL_SECONDS", "1")))
-    raise typer.BadParameter("Implemented sources are: shwoo, pcc, judicial, moj_auction, moj_enforcement")
+    if source == "customs":
+        return CustomsAuctionAdapter(request_interval=float(os.getenv("CUSTOMS_REQUEST_INTERVAL_SECONDS", "1")))
+    if source == "moj_enforcement_cms":
+        return MojEnforcementCmsAdapter(
+            request_interval=float(os.getenv("MOJ_ENFORCEMENT_CMS_REQUEST_INTERVAL_SECONDS", "1")),
+            request_timeout_seconds=float(os.getenv("MOJ_ENFORCEMENT_CMS_REQUEST_TIMEOUT_SECONDS", "12")),
+            max_request_attempts=int(os.getenv("MOJ_ENFORCEMENT_CMS_MAX_REQUEST_ATTEMPTS", "2")),
+            branch_deadline_seconds=float(os.getenv("MOJ_ENFORCEMENT_CMS_BRANCH_DEADLINE_SECONDS", "45")),
+        )
+    raise typer.BadParameter(
+        "Implemented sources are: shwoo, pcc, judicial, moj_auction, moj_enforcement, "
+        "moj_enforcement_cms, customs"
+    )
 
 
 async def run_healthcheck(source: str) -> None:
@@ -153,7 +197,14 @@ async def run_sync(source: str, limit: int | None, manifest: Path | None = None)
     result = SyncResult(source=source, discovered=0, fetched=0, parsed=0, changed=0, failed=0)
     run_id = repository.start_run()
     try:
-        items = await adapter.discover()
+        try:
+            items = await adapter.discover()
+        except Exception as exc:
+            record_discovery_warnings(result, adapter)
+            result.failed += 1
+            result.warnings.append(f"Discovery failed: {exception_message(exc)}")
+            raise
+        record_discovery_warnings(result, adapter)
         if limit is not None:
             items = items[:limit]
         result.discovered = len(items)
@@ -167,6 +218,7 @@ async def run_sync(source: str, limit: int | None, manifest: Path | None = None)
                 if await repository.save(run_id, item, artifacts, record):
                     result.changed += 1
                 result.parsed += 1
+                record_partial_item(result, item)
             except Exception as exc:
                 result.failed += 1
                 result.warnings.append(f"{item.source_record_id}: {exception_message(exc)}")
@@ -200,7 +252,14 @@ async def run_publish_public(source: str, limit: int | None) -> None:
     result = SyncResult(source=source, discovered=0, fetched=0, parsed=0, changed=0, failed=0)
     await publisher.start()
     try:
-        items = await adapter.discover()
+        try:
+            items = await adapter.discover()
+        except Exception as exc:
+            record_discovery_warnings(result, adapter)
+            result.failed += 1
+            result.warnings.append(f"Discovery failed: {exception_message(exc)}")
+            raise
+        record_discovery_warnings(result, adapter)
         if limit is not None:
             items = items[:limit]
         result.discovered = len(items)
@@ -214,6 +273,7 @@ async def run_publish_public(source: str, limit: int | None) -> None:
                 if await publisher.publish(item, artifacts, record):
                     result.changed += 1
                 result.parsed += 1
+                record_partial_item(result, item)
             except Exception as exc:
                 result.failed += 1
                 result.warnings.append(f"{item.source_record_id}: {exception_message(exc)}")
@@ -297,7 +357,7 @@ def publish_public_shwoo(limit: int | None = typer.Option(None, min=1)) -> None:
 
 @app.command("publish-public")
 def publish_public(
-    source: str = typer.Option(..., help="Reviewed automated source: shwoo or moj_auction"),
+    source: str = typer.Option(..., help="Reviewed automated source key"),
     limit: int | None = typer.Option(None, min=1),
 ) -> None:
     """Preserve private artifacts and publish a sanitized official-source feed."""

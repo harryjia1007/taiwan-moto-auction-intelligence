@@ -18,6 +18,12 @@ jobs:
         include:
           - source: moj_auction
             label: 法務部集中拍賣
+          - source: pcc
+            label: 政府電子採購網財物變賣開放資料
+          - source: customs
+            label: 財政部關務署四關標售公告
+          - source: moj_enforcement_cms
+            label: 行政執行署 13 分署公告
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -44,3 +50,6 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RAW_ARTIFACT_BUCKET: raw-artifacts
           MOJ_AUCTION_REQUEST_INTERVAL_SECONDS: "1"
+          PCC_REQUEST_INTERVAL_SECONDS: "1"
+          CUSTOMS_REQUEST_INTERVAL_SECONDS: "1"
+          MOJ_ENFORCEMENT_CMS_REQUEST_INTERVAL_SECONDS: "1"

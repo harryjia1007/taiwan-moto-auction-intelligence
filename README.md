@@ -8,7 +8,7 @@
 
 The project turns fragmented Taiwanese public-sector car-and-motorcycle auction notices into a searchable, evidence-preserving dataset. It is designed for buyers, civic technologists, journalists, and researchers who need to trace every normalized fact back to an official source.
 
-> **Project status:** private pre-1.0 system with a separate synthetic public Demo. Only Shwoo and the MOJ centralized portal are eligible for unattended schedules; Judicial records require a human-reviewed official PDF manifest and Government e-Procurement is paused for authorization review. Code presence never implies authorized or active coverage.
+> **Project status:** private pre-1.0 system with a sanitized public live marketplace. The hosted schedule covers MOJ centralized auctions, PCC dataset 7263, Customs HTML announcements, and 13 Administrative Enforcement branch CMS sites. Shwoo currently requires the owner's Taiwan network; Judicial records require a human-reviewed official PDF manifest. Code presence never implies authorized or active coverage.
 
 ## Why this exists
 
@@ -29,12 +29,14 @@ This project provides:
 | Source family | Implemented capability | Current status |
 |---|---|---|
 | [Judicial Yuan movable-property auctions](docs/ingestion/judicial.md) | Human-reviewed official PDF links and structured fields can be imported without querying or mirroring the blocked central site | `PARTIAL / MANUAL_ONLY` |
-| [Government e-Procurement asset sales](docs/ingestion/pcc.md) | Adapter retained but unattended access is paused pending written confirmation | `DEGRADED` |
+| [Government e-Procurement asset sales](docs/ingestion/pcc.md) | Official dataset 7263 XML discovery with exact same-host HTTPS detail matching | `PARTIAL` until first successful scheduled run |
 | [Taipei Shwoo](docs/ingestion/shwoo.md) | Search, detail, auction-round, evidence, and photo-preserving ingestion | `PARTIAL` |
-| [MOJ seized-property auctions](docs/ingestion/moj-auction.md) | Central vehicle-category discovery, announcement, attachment, and image preservation | `PARTIAL` |
+| [MOJ seized-property auctions](docs/ingestion/moj-auction.md) | Central vehicle-category discovery, announcement, attachment, and image preservation | `ACTIVE` after a successful hosted run; unresolved external-office details remain visibly partial |
 | [Administrative Enforcement](docs/ingestion/moj-enforcement.md) | Human CAPTCHA search followed by validated detail, document, and photo ingestion | `PARTIAL` |
+| [Administrative Enforcement branch CMS](docs/ingestion/moj-enforcement-cms.md) | Bounded discovery across 13 official branch announcement sites without using the central CAPTCHA | `PARTIAL` until first successful all-branch run |
+| [Customs four-office auctions](docs/ingestion/customs.md) | Official HTML announcement/detail discovery; restricted attachments remain outbound links | `PARTIAL` until first successful scheduled run |
 
-Customs and direct police/traffic sources remain `PLANNED`. Administrative Enforcement is not scheduled because discovery requires a human-completed CAPTCHA. See the [source registry](docs/data/source-registry.md) for the exact distinction between implemented code and verified live coverage.
+Direct police/traffic sources remain `PLANNED`. The Administrative Enforcement central search remains `MANUAL_ONLY` because it requires a human-completed CAPTCHA; the separate 13-branch public CMS collector is scheduled twice daily and never submits that CAPTCHA. See the [source registry](docs/data/source-registry.md) for the exact distinction between implemented code and verified live coverage.
 
 ## Architecture
 
@@ -104,7 +106,7 @@ pnpm ingest:health
 pnpm ingest
 ```
 
-Run an authorized scheduled source with `pnpm ingest:shwoo` or `pnpm ingest:moj-auction`. `pnpm ingest:pcc` intentionally fails closed while its policy is `REVIEW_REQUIRED`. Judicial records use a private, human-reviewed official-link manifest:
+Run an authorized source with `pnpm ingest:shwoo`, `pnpm ingest:moj-auction`, `pnpm ingest:pcc`, `pnpm ingest:customs`, or `pnpm ingest:moj-enforcement-cms`. The hosted workflow checks the four cloud-safe sources twice daily; PCC's official feed itself updates once per working day. Judicial records use a private, human-reviewed official-link manifest:
 
 ```bash
 python -m ingest sync --source judicial --manifest ./private/judicial-official-links.json

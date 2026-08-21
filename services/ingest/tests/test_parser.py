@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ingest.models import BidEligibility, CarCategory, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass, VehicleType
-from ingest.parser import car_category_from_official_text, motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime, vehicle_type_from_official_text
+from ingest.parser import car_category_from_official_text, integer, motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime, vehicle_type_from_official_text
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -70,6 +70,7 @@ def test_motorcycle_class_requires_explicit_official_wording(official_text: str,
         ("普通重型機車一輛", VehicleType.MOTORCYCLE),
         ("自用小客車一輛", VehicleType.CAR),
         ("汽車一輛、機車一輛", VehicleType.MIXED),
+        ("報廢汽、機車及報廢財產一批", VehicleType.MIXED),
         ("機車過戶前應繳清汽車燃料使用費", VehicleType.MOTORCYCLE),
     ],
 )
@@ -80,6 +81,14 @@ def test_vehicle_type_uses_explicit_official_wording(official_text: str, expecte
 def test_car_category_is_kept_separate_from_motorcycle_class() -> None:
     assert car_category_from_official_text("自用小客車一輛")[0] == CarCategory.PASSENGER
     assert car_category_from_official_text("大貨車一輛")[0] == CarCategory.TRUCK
+
+
+@pytest.mark.parametrize(
+    ("official_text", "expected"),
+    [("新臺幣2,500元整", 2500), ("1萬6千元", 16000), ("12萬元", 120000)],
+)
+def test_integer_parses_official_arabic_amount_units(official_text: str, expected: int) -> None:
+    assert integer(official_text) == expected
 
 
 def test_judicial_structured_record_preserves_unknown_price_and_exact_identity() -> None:
@@ -275,6 +284,22 @@ def test_pcc_impounded_batch_preserves_count_and_origin() -> None:
     assert record.reserve_price == 134000
     assert record.deposit == 2500
     assert record.vehicle_units == []
+
+
+def test_pcc_mixed_scrap_title_and_ten_thousand_deposit_are_not_lost() -> None:
+    source = artifact("pcc_impounded.html")
+    source.content = source.content.replace(
+        "交通違規移置保管逾期未領回汽機車公開標售案(汽車11輛、機車4輛)".encode(),
+        "報廢汽、機車及報廢財產一批".encode(),
+    ).replace("新臺幣2,500元整".encode(), "1萬6千元".encode())
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=99900003"
+
+    record = parse_pcc_detail(pcc_item("99900003", "報廢汽、機車及報廢財產一批"), source)
+
+    assert record.vehicle_type == VehicleType.MIXED
+    assert record.registration_status == RegistrationStatus.SCRAP_ONLY
+    assert record.disposal_origin == "SCRAP_DISPOSAL"
+    assert record.deposit == 16000
 
 
 def test_fee_and_deadline_fields_are_evidenced() -> None:

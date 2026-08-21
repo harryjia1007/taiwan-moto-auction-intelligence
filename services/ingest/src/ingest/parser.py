@@ -55,6 +55,14 @@ def roc_compact_date(value: str) -> datetime | None:
 def integer(value: str | None) -> int | None:
     if not value:
         return None
+    unit_values = {"億": 100_000_000, "萬": 10_000, "千": 1_000, "百": 100, "十": 10}
+    unit_parts = re.findall(r"([\d,]+)\s*([億萬千百十])", value)
+    if unit_parts:
+        total = sum(int(number.replace(",", "")) * unit_values[unit] for number, unit in unit_parts)
+        suffix = re.search(r"[億萬千百十]\s*([\d,]+)(?!\s*[億萬千百十])", value)
+        if suffix:
+            total += int(suffix.group(1).replace(",", ""))
+        return total
     match = re.search(r"([\d,]+)", value)
     return int(match.group(1).replace(",", "")) if match else None
 
@@ -92,6 +100,9 @@ def vehicle_type_from_official_text(value: str) -> tuple[VehicleType, str | None
     """Classify the advertised lot without treating fuel-fee boilerplate as a car."""
     normalized = clean(value)
     without_fuel_boilerplate = re.sub(r"汽車燃料(?:使用)?費", "燃料費", normalized)
+    combined_vehicle = re.search(r"汽(?:、|及|與|和)?機車", without_fuel_boilerplate)
+    if combined_vehicle:
+        return VehicleType.MIXED, combined_vehicle.group(0)
     motorcycle = MOTORCYCLE_PATTERN.search(without_fuel_boilerplate)
     car = CAR_PATTERN.search(without_fuel_boilerplate)
     if motorcycle and car:
@@ -308,7 +319,13 @@ def parse_moj_auction_detail(item: DiscoveredItem, artifacts: list[RawArtifact])
     html = next((artifact for artifact in artifacts if artifact.mime_type == "text/html"), None)
     soup = BeautifulSoup(html.content, "html.parser") if html else BeautifulSoup("", "html.parser")
     title_node = soup.select_one("h2.title")
-    title = clean(title_node.get_text(" ", strip=True) if title_node else item.title)
+    central_row = soup.select_one("tr") if not title_node else None
+    central_link = central_row.select_one("td[data-title='標題'] a[href]") if central_row else None
+    title = clean(
+        title_node.get_text(" ", strip=True)
+        if title_node else central_link.get_text(" ", strip=True)
+        if central_link else item.title
+    )
     body_node = soup.select_one("section.cp")
     body = clean(body_node.get_text(" ", strip=True) if body_node else "")
     combined = _redact_personal_data(f"{title} {body}")
@@ -318,7 +335,14 @@ def parse_moj_auction_detail(item: DiscoveredItem, artifacts: list[RawArtifact])
     car_category, car_category_text = car_category_from_official_text(combined)
 
     organization_meta = soup.select_one("meta[name='DC.Creator']")
-    organization = clean(organization_meta.get("content", "") if organization_meta else str(item.metadata.get("organization") or "")) or "未辨識檢察機關"
+    central_cells = {
+        cell.get("data-title"): clean(cell.get_text(" ", strip=True))
+        for cell in central_row.select("td[data-title]")
+    } if central_row else {}
+    organization = clean(
+        organization_meta.get("content", "")
+        if organization_meta else central_cells.get("單位") or str(item.metadata.get("organization") or "")
+    ) or "未辨識檢察機關"
     case_match = re.search(r"(\d{2,3}年度(?:變價|執沒|扣押物|偵)字第[\d、,，至-]+號)", combined)
     official_case_number = clean(case_match.group(1)) if case_match else None
     auction_sentence = _explicit_fact_sentence(combined, r"拍賣(?:時間|日期)") or combined
@@ -366,6 +390,7 @@ def parse_moj_auction_detail(item: DiscoveredItem, artifacts: list[RawArtifact])
 
     evidence: list[EvidenceRef] = []
     for field_name, normalized, source in (
+        ("title", title, title),
         ("official_case_number", official_case_number, official_case_number),
         ("organization", organization, organization),
         ("ends_at", auction_at.isoformat() if auction_at else None, auction_sentence if auction_at else None),
@@ -704,7 +729,7 @@ def parse_pcc_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAucti
         eligibility = BidEligibility.UNKNOWN
 
     explicit_scrap = bool(re.search(r"(僅能依廢棄物處理|不得再領牌|不可再領牌)", combined))
-    inferred_scrap = bool(re.search(r"報廢(?:汽|機)車|廢(?:汽|機)車", combined))
+    inferred_scrap = bool(re.search(r"(?:報廢|廢)(?:汽(?:、|及|與|和)?機車|汽車|機車|機動車輛|車輛)", combined))
     if "可再領牌" in combined:
         registration = RegistrationStatus.RE_REGISTRATION_REQUIRED
     elif explicit_scrap or inferred_scrap:

@@ -126,21 +126,49 @@ class SupabasePublicPublisher:
         )
         return True
 
+    async def _enforce_public_plate_retention(self, now: datetime | None = None) -> None:
+        reference_time = now or datetime.now(UTC)
+        if reference_time.tzinfo is None:
+            raise ValueError("Public plate retention requires an aware UTC reference time")
+        cutoff = (reference_time.astimezone(UTC) - timedelta(days=30)).isoformat()
+        encoded_cutoff = quote(cutoff, safe="")
+        await self._json(
+            "PATCH",
+            "/rest/v1/public_live_motorcycle_listings"
+            f"?plate_number=not.is.null&or=(ends_at.is.null,ends_at.lt.{encoded_cutoff})",
+            headers={**self.headers, "Prefer": "return=minimal"},
+            json={"plate_number": None},
+        )
+
     async def finish(self, result: SyncResult) -> None:
         if not self.source_id or not self.run_id:
             return
-        status = "FAILED" if result.parsed == 0 and result.failed else "PARTIAL" if result.failed else "SUCCEEDED"
+        completed_at = datetime.now(UTC)
+        try:
+            await self._enforce_public_plate_retention(completed_at)
+        except Exception as exc:
+            result.failed += 1
+            result.warnings.append(f"Public plate retention cleanup failed: {exc}")
+        status = (
+            "FAILED" if result.parsed == 0 and result.failed
+            else "PARTIAL" if result.discovered == 0 or result.failed or result.warnings
+            else "SUCCEEDED"
+        )
         await self._json(
             "PATCH", f"/rest/v1/sync_runs?id=eq.{self.run_id}",
             headers={**self.headers, "Prefer": "return=minimal"},
             json={
-                "completed_at": datetime.now(UTC).isoformat(), "status": status,
+                "completed_at": completed_at.isoformat(), "status": status,
                 "discovered_count": result.discovered, "fetched_count": result.fetched,
                 "parsed_count": result.parsed, "changed_count": result.changed,
                 "failed_count": result.failed, "warnings": result.warnings,
             },
         )
-        source_update: dict[str, Any] = {"last_attempted_at": datetime.now(UTC).isoformat()}
-        if result.parsed:
-            source_update.update({"last_successful_at": datetime.now(UTC).isoformat(), "status": "ACTIVE", "parser_version": PARSER_VERSION})
+        source_update: dict[str, Any] = {"last_attempted_at": completed_at.isoformat()}
+        if status == "SUCCEEDED":
+            source_update.update({"last_successful_at": completed_at.isoformat(), "status": "ACTIVE", "parser_version": PARSER_VERSION})
+        elif status == "PARTIAL":
+            source_update.update({"status": "PARTIAL", "parser_version": PARSER_VERSION})
+        elif status == "FAILED":
+            source_update.update({"status": "DEGRADED", "parser_version": PARSER_VERSION})
         await self._json("PATCH", f"/rest/v1/sources?id=eq.{self.source_id}", headers={**self.headers, "Prefer": "return=minimal"}, json=source_update)

@@ -31,16 +31,33 @@ SOURCE_POLICIES = {
         "Official robots rules allow the /shwoo/ application path; redistribution remains private-only.",
     ),
     "moj_auction": SourceAccessPolicy(
-        "moj_auction", AccessDecision.ALLOW, "https://auction.moj.gov.tw/robots.txt", date(2026, 8, 15),
-        "Official robots rules do not disallow the public auction portal.",
+        "moj_auction", AccessDecision.ALLOW, "https://auction.moj.gov.tw/robots.txt", date(2026, 8, 18),
+        "Access is approved only for the central auction.moj.gov.tw portal. A central redirect does not extend "
+        "that approval to an agency subdomain; unreviewed detail hosts remain uncontacted and the exact central "
+        "list-row evidence is retained as a partial record.",
     ),
     "moj_enforcement": SourceAccessPolicy(
         "moj_enforcement", AccessDecision.MANUAL_ONLY, "https://www.tpkonsale.moj.gov.tw/", date(2026, 8, 15),
         "Discovery requires a human-completed CAPTCHA; only validated detail manifests may be processed.",
     ),
+    "moj_enforcement_cms": SourceAccessPolicy(
+        "moj_enforcement_cms", AccessDecision.ALLOW,
+        "https://www.tpy.moj.gov.tw/robots.txt", date(2026, 8, 20),
+        "ALLOW is limited to the explicitly registered 13 Administrative Enforcement branch CMS hosts. "
+        "Every run rechecks each same-host robots.txt and declared sitemap before reading bounded public "
+        "announcement lists. This decision does not extend to the CAPTCHA-gated central search.",
+    ),
     "pcc": SourceAccessPolicy(
-        "pcc", AccessDecision.REVIEW_REQUIRED, "https://web.pcc.gov.tw/robots.txt", date(2026, 8, 15),
-        "The robots endpoint redirects to the site rather than publishing a usable policy; unattended collection is paused pending review.",
+        "pcc", AccessDecision.ALLOW, "https://web.pcc.gov.tw/robots.txt", date(2026, 8, 18),
+        "ALLOW is based on the published machine-readable asset-sale dataset 7263, not an inference from "
+        "an ambiguous robots response. The dataset is free under OGDL 1.0 and updated each working day; "
+        "exact matched detail pages remain limited to HTTPS on web.pcc.gov.tw.",
+    ),
+    "customs": SourceAccessPolicy(
+        "customs", AccessDecision.ALLOW, "https://web.customs.gov.tw/robots.txt", date(2026, 8, 19),
+        "The four Customs announcement lists and HTML detail pages are public and not disallowed. "
+        "The robots policy excludes /download/; attachments are therefore linked as official evidence "
+        "but never downloaded or mirrored.",
     ),
     "judicial": SourceAccessPolicy(
         "judicial", AccessDecision.MANUAL_ONLY, "https://aomp109.judicial.gov.tw/robots.txt", date(2026, 8, 15),

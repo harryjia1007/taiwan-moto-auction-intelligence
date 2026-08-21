@@ -14,8 +14,10 @@ const checks = [
   ["Supabase service key", /SUPABASE_SERVICE_ROLE_KEY\s*=|service_role["']?\s*[:=]\s*["'][A-Za-z0-9._-]{20,}/i],
   ["JWT-like secret", /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}/],
   ["private environment owner", /OWNER_EMAIL\s*=|owner@example\.com/i],
-  ["Taiwan national ID", /\b[A-Z][12]\d{8}\b/],
-  ["phone number", /\b09\d{2}[- ]?\d{3}[- ]?\d{3}\b/],
+  ["Taiwan national ID", /\b[A-Z][12]\d{8}\b/i],
+  ["role-labelled person name", /(義務人|債務人|所有人|車主|被告|受刑人|保管人|姓名)\s*[:：]?\s*(?!已隱去)[\u4e00-\u9fff○ＯO·．・]{2,6}/u],
+  ["phone number", /\b(?:09\d{2}[- ]?\d{3}[- ]?\d{3}|0\d{1,2}[- ]\d{6,8})\b/],
+  ["non-designated email address", /\b(?!privacy@harryjia\.com\b)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i],
   ["vehicle plate", /\b(?!(?:WEB|ERR)-)(?:[A-Z]{2,3}-\d{4}|\d{3}-[A-Z]{3})\b/],
   ["official attachment deep link", /(?:DO_VIEWPDF\.htm|AUID=\d+|readOneAspamDetailOld\?|\/Detail\/Chattel\?NO=)/i],
 ];

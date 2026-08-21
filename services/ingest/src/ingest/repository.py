@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from ingest import PARSER_VERSION
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SyncResult
 from ingest.storage import ArtifactStorage
-from ingest.source_policy import AccessDecision, policy_for
+from ingest.source_policy import AccessDecision
 
 SOURCE_IDS = {
     "shwoo": "20000000-0000-0000-0000-000000000001",
@@ -19,11 +19,28 @@ SOURCE_IDS = {
     "pcc": "20000000-0000-0000-0000-000000000004",
     "moj_auction": "20000000-0000-0000-0000-000000000005",
     "moj_enforcement": "20000000-0000-0000-0000-000000000003",
+    "customs": "20000000-0000-0000-0000-000000000007",
+    "moj_enforcement_cms": "20000000-0000-0000-0000-000000000008",
 }
 
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def source_status_after_run(access: AccessDecision, run_status: str) -> str:
+    """Resolve readiness without allowing a run to override access policy."""
+    if access == AccessDecision.DISABLED:
+        return "DISABLED"
+    if access == AccessDecision.REVIEW_REQUIRED:
+        return "DEGRADED"
+    if access == AccessDecision.MANUAL_ONLY:
+        return "DEGRADED" if run_status == "FAILED" else "PARTIAL"
+    if run_status == "SUCCEEDED":
+        return "ACTIVE"
+    if run_status == "PARTIAL":
+        return "PARTIAL"
+    return "DEGRADED"
 
 
 class DatabaseRepository:
@@ -385,23 +402,33 @@ class DatabaseRepository:
         return rows
 
     def finish_run(self, run_id: str, result: SyncResult) -> None:
-        status = "FAILED" if result.parsed == 0 and result.failed > 0 else "PARTIAL" if result.discovered == 0 or result.failed else "SUCCEEDED"
+        status = (
+            "FAILED" if result.parsed == 0 and result.failed > 0
+            else "PARTIAL" if result.discovered == 0 or result.failed or result.warnings
+            else "SUCCEEDED"
+        )
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """update sync_runs set completed_at=now(),status=%s,discovered_count=%s,fetched_count=%s,
                    changed_count=%s,parsed_count=%s,failed_count=%s,warnings=%s::jsonb where id=%s""",
                 (status, result.discovered, result.fetched, result.changed, result.parsed, result.failed, _json(result.warnings), run_id),
             )
-            access = policy_for(self.source).decision
-            if access == AccessDecision.DISABLED:
-                cur.execute("update sources set status='DISABLED' where id=%s", (self.source_id,))
-            elif access == AccessDecision.REVIEW_REQUIRED:
-                cur.execute("update sources set status='DEGRADED' where id=%s", (self.source_id,))
-            elif status == "SUCCEEDED" and self.source != "moj_enforcement":
-                cur.execute("update sources set status='ACTIVE',last_successful_at=now() where id=%s", (self.source_id,))
-            elif status == "SUCCEEDED":
-                cur.execute("update sources set status='PARTIAL',last_successful_at=now() where id=%s", (self.source_id,))
-            elif status == "PARTIAL":
-                cur.execute("update sources set status='PARTIAL' where id=%s", (self.source_id,))
-            elif status == "FAILED":
-                cur.execute("update sources set status='DEGRADED' where id=%s", (self.source_id,))
+            cur.execute(
+                "select decision from source_access_policies where source_id=%s",
+                (self.source_id,),
+            )
+            policy_row = cur.fetchone()
+            # Missing registry state is never permission to promote a source.
+            access = (
+                AccessDecision(policy_row["decision"])
+                if policy_row is not None
+                else AccessDecision.REVIEW_REQUIRED
+            )
+            source_status = source_status_after_run(access, status)
+            if status == "SUCCEEDED":
+                cur.execute(
+                    "update sources set status=%s,last_successful_at=now() where id=%s",
+                    (source_status, self.source_id),
+                )
+            else:
+                cur.execute("update sources set status=%s where id=%s", (source_status, self.source_id))

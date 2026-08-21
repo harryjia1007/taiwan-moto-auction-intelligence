@@ -14,7 +14,7 @@ A private, one-person dashboard answers what a motorcycle is, why it is sold, wh
 
 ## Current private production slice and public Demo
 
-Taipei Shwoo has the complete photo-preserving vertical slice and the MOJ centralized portal has an authorized private adapter. Judicial live discovery is `DISABLED` by current robots policy and Government e-Procurement is `REVIEW_REQUIRED`; neither may run unattended. Administrative Enforcement detail, attachment, and photo ingestion is `MANUAL_ONLY` because official discovery requires CAPTCHA. Direct police/traffic pages and Customs remain `PLANNED`; paid vehicle-registry data is a separate manual enrichment workflow rather than an auction source.
+Taipei Shwoo has the photo-preserving vertical slice, the MOJ centralized portal has a host-scoped adapter, and Government e-Procurement uses official dataset 7263 XML with exact same-host detail matching. Administrative Enforcement now has a separate, fail-closed adapter for the 13 public branch CMS sites; its CAPTCHA-gated central search remains `MANUAL_ONLY`. Customs covers the four official HTML announcement channels and links restricted attachments without downloading them. Judicial live discovery remains `MANUAL_ONLY` under the current robots policy. Paid vehicle-registry data is a separate owner-authorized enrichment workflow rather than an auction source.
 
 `/demo` is an independent public portfolio surface. It contains only synthetic cases and project-owned illustrative visuals, has no Supabase or official-source dependency, and never exposes official attachment deep links. `/motorcycles`, `/sources`, their APIs, favorites, evidence and signed media remain owner-only.
 
