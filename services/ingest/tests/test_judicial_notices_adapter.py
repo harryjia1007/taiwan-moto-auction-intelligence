@@ -9,13 +9,25 @@ import httpx
 import pytest
 
 from ingest.adapters.base import SourceAccessDenied, SourceRateLimited
-from ingest.adapters.judicial_notices import JudicialPublicNoticesAdapter
+from ingest.adapters.judicial_notices import JudicialPublicNoticesAdapter, _roc_datetime
 from ingest.models import AuctionStatus, FourState, RegistrationStatus, VehicleClass, VehicleType
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TAIPEI = ZoneInfo("Asia/Taipei")
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=TAIPEI)
+
+
+@pytest.mark.parametrize(
+    ("source_text", "expected_hour"),
+    [
+        ("拍賣日期：115年9月25日下午2時30分", 14),
+        ("拍賣日期：115年9月25日上午10時30分", 10),
+        ("拍賣日期：115年9月25日14時30分", 14),
+    ],
+)
+def test_roc_datetime_preserves_meridiem(source_text: str, expected_hour: int) -> None:
+    assert _roc_datetime(source_text) == datetime(2026, 9, 25, expected_hour, 30, tzinfo=TAIPEI)
 
 
 def fixture(name: str) -> bytes:

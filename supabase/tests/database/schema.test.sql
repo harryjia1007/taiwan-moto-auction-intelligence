@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(187);
+select plan(200);
 
 select has_table('public', 'raw_artifacts', 'raw artifacts exist');
 select has_table('public', 'field_evidence', 'field evidence exists');
@@ -742,6 +742,89 @@ select is(
   ),
   'lot',
   'retiring a superseded vehicle exposes the official lot without deleting history'
+);
+
+-- Reapply the exact migration bootstrap after operator restrictions are set.
+-- Release metadata must not silently reactivate a source, policy or endpoint.
+select lives_ok(
+  $$insert into public.organizations
+      (canonical_name, organization_type, jurisdiction, official_domain)
+    values ('臺灣臺北地方法院', 'DISTRICT_COURT', '臺灣', 'judicial.gov.tw')
+    on conflict (canonical_name, jurisdiction) do update set
+      organization_type = excluded.organization_type,
+      official_domain = excluded.official_domain$$,
+  'production organization bootstrap uses the actual composite unique key'
+);
+select is(
+  (select count(*) from public.organizations where canonical_name = '臺灣臺北地方法院' and jurisdiction = '臺灣'),
+  1::bigint,
+  'replaying an official organization does not create a duplicate'
+);
+select ok(
+  not has_function_privilege('anon', 'private.bootstrap_judicial_public_notices()', 'execute'),
+  'anonymous users cannot invoke the private source bootstrap'
+);
+select ok(
+  not has_function_privilege('service_role', 'private.bootstrap_judicial_public_notices()', 'execute'),
+  'hosted publisher cannot invoke the private source bootstrap'
+);
+update public.sources
+set status = 'DISABLED'
+where id = '20000000-0000-0000-0000-000000000009';
+update public.source_access_policies
+set decision = 'MANUAL_ONLY'
+where source_id = '20000000-0000-0000-0000-000000000009';
+update public.source_endpoints
+set enabled = false
+where source_id = '20000000-0000-0000-0000-000000000009'
+  and endpoint_type = 'DISCOVERY';
+select lives_ok(
+  $$select private.bootstrap_judicial_public_notices()$$,
+  'source registry bootstrap may safely repeat after manual-only restriction'
+);
+select is(
+  (select status::text from public.sources where id = '20000000-0000-0000-0000-000000000009'),
+  'DISABLED',
+  'source bootstrap preserves an operator-disabled source'
+);
+select is(
+  (select decision from public.source_access_policies where source_id = '20000000-0000-0000-0000-000000000009'),
+  'MANUAL_ONLY',
+  'source bootstrap does not promote manual-only access to ALLOW'
+);
+select is(
+  (select enabled from public.source_endpoints where source_id = '20000000-0000-0000-0000-000000000009' and endpoint_type = 'DISCOVERY'),
+  false,
+  'source bootstrap preserves an operator-disabled endpoint'
+);
+update public.source_access_policies
+set decision = 'REVIEW_REQUIRED'
+where source_id = '20000000-0000-0000-0000-000000000009';
+select lives_ok(
+  $$select private.bootstrap_judicial_public_notices()$$,
+  'source registry bootstrap may safely repeat during policy review'
+);
+select is(
+  (select decision from public.source_access_policies where source_id = '20000000-0000-0000-0000-000000000009'),
+  'REVIEW_REQUIRED',
+  'source bootstrap preserves policy review gate'
+);
+update public.source_access_policies
+set decision = 'DISABLED'
+where source_id = '20000000-0000-0000-0000-000000000009';
+select lives_ok(
+  $$select private.bootstrap_judicial_public_notices()$$,
+  'source registry bootstrap may safely repeat after policy disablement'
+);
+select is(
+  (select decision from public.source_access_policies where source_id = '20000000-0000-0000-0000-000000000009'),
+  'DISABLED',
+  'source bootstrap preserves disabled policy'
+);
+select is(
+  (select enabled from public.source_endpoints where source_id = '20000000-0000-0000-0000-000000000009' and endpoint_type = 'DISCOVERY'),
+  false,
+  'source bootstrap never re-enables the discovery endpoint'
 );
 
 select * from finish();

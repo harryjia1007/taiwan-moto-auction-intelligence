@@ -1114,12 +1114,19 @@ def parse_pcc_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAucti
 
     normalized_title = unicodedata.normalize("NFKC", title)
     vehicle_noun = r"(?:汽車|機車|小客車|大客車|小貨車|大貨車|客貨兩用車|休旅車|轎車|廂型車|貨車)"
-    count_matches = list(re.finditer(rf"{vehicle_noun}\s*(\d+)\s*[輛台部]", normalized_title))
+    # An explicit Chinese singular count proves one vehicle just as "1 輛"
+    # does. Without an explicit count we deliberately retain the notice as a
+    # lot of unknown cardinality instead of inventing one identified vehicle.
+    count_token = r"(\d+|一|壹|乙)"
+    count_matches = list(re.finditer(rf"{vehicle_noun}\s*{count_token}\s*[輛台部]", normalized_title))
     if not count_matches:
-        count_matches = list(re.finditer(rf"(\d+)\s*[輛台部][^，。]{{0,8}}{vehicle_noun}", normalized_title))
-    vehicle_count = sum(int(match.group(1)) for match in count_matches) if count_matches else None
+        count_matches = list(re.finditer(rf"{count_token}\s*[輛台部][^，。]{{0,8}}{vehicle_noun}", normalized_title))
+    vehicle_count = (
+        sum(int(match.group(1)) if match.group(1).isdigit() else 1 for match in count_matches)
+        if count_matches else None
+    )
     lot_size = vehicle_count or 1
-    bulk_lot = vehicle_count != 1
+    bulk_lot = vehicle_count is None or vehicle_count > 1 or vehicle_type == VehicleType.MIXED
 
     fee_notes = [deposit_text] if deposit_text else []
     location = table.get("變賣標的所在地") or table.get("開標地點") or table.get("機關地址")

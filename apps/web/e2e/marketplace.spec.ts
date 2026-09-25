@@ -44,7 +44,7 @@ test("quick presets keep the shopper's source and region, and scrap navigation c
   await expect(page.getByLabel("目前瀏覽條件")).toContainText("司法院地院法拍");
 
   await page.goto("/motorcycles?view=active&source=judicial&eligibility=NATURAL_PERSON_ALLOWED&registration=NORMAL_TRANSFER&excludeScrap=true");
-  await page.getByRole("link", { name: /報廢／回收/ }).click();
+  await page.getByRole("navigation", { name: "拍賣案件狀態" }).getByRole("link", { name: /報廢／回收/ }).click();
   await expect(page).toHaveURL(/view=scrap/);
   await expect(page).toHaveURL(/source=judicial/);
   await expect(page).not.toHaveURL(/eligibility=|registration=|excludeScrap=/);
@@ -98,9 +98,10 @@ test("judicial no-photo records omit the media block and keep a compact fact lab
 });
 
 test("no-photo marketplace cards omit empty media and keep deadline plus favorite controls", async ({ page }) => {
-  await page.goto("/motorcycles?view=active");
+  await page.goto("/motorcycles?view=all&source=judicial");
   await expect(page.getByPlaceholder("例如：品牌、重型機車、車牌、法院機關")).toBeVisible();
   const card = page.locator(".moto-card.no-official-photo").filter({ hasText: "TEST-COURT-04" });
+  await expect(card).toBeVisible();
   await expect(card.locator(".card-image")).toHaveCount(0);
   await expect(card.locator(".auction-state")).toHaveCount(0);
   await expect(card.locator(".deadline-copy")).toContainText("截止");
@@ -109,8 +110,9 @@ test("no-photo marketplace cards omit empty media and keep deadline plus favorit
 });
 
 test("identified judicial vehicles can be favorited from the card and appear in favorites", async ({ page }) => {
-  await page.goto("/motorcycles?view=active&source=judicial");
+  await page.goto("/motorcycles?view=all&source=judicial");
   const card = page.locator(".moto-card").filter({ hasText: "TEST-COURT-04" });
+  await expect(card).toBeVisible();
   const favorite = card.getByRole("button", { name: "加入收藏" });
   await expect(favorite).toBeVisible();
   await favorite.click();
@@ -186,7 +188,7 @@ test("source health makes planned coverage explicit", async ({ page }) => {
 test("scrap and recycler-only records stay in their dedicated area", async ({ page }) => {
   await page.goto("/motorcycles?view=active");
   await expect(page.getByRole("link", { name: "花蓮地院報廢機車標售批次", exact: true })).toHaveCount(0);
-  await page.getByRole("link", { name: /報廢／回收/ }).click();
+  await page.getByRole("navigation", { name: "拍賣案件狀態" }).getByRole("link", { name: /報廢／回收/ }).click();
   await expect(page).toHaveURL(/view=scrap/);
   await expect(page.getByRole("link", { name: "花蓮地院報廢機車標售批次", exact: true })).toBeVisible();
 });
@@ -203,9 +205,10 @@ test("car listings use car-specific cards and detail language without inventing 
   await expect(page.getByRole("link", { name: "TOYOTA 小客車（測試）", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "公務小貨車（測試）", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "TOYOTA 小客車（測試）", exact: true }).click();
-  await expect(page.getByText("汽車類別", { exact: true })).toBeVisible();
-  await expect(page.getByText("小客車／轎車", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("機車級別", { exact: true })).toHaveCount(0);
+  const vehicleFacts = page.getByRole("heading", { name: "車輛與車況" }).locator("..");
+  await expect(vehicleFacts.getByText("汽車類別", { exact: true })).toBeVisible();
+  await expect(vehicleFacts.getByText("小客車／轎車", { exact: true })).toBeVisible();
+  await expect(vehicleFacts.getByText("機車級別", { exact: true })).toHaveCount(0);
   const history = page.getByRole("heading", { name: "拍賣歷史" }).locator("..");
   await expect(history).toContainText("官方未提供");
   await expect(history).not.toContainText("NT$0");

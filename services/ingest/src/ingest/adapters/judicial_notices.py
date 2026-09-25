@@ -69,7 +69,7 @@ def _roc_datetime(value: str) -> datetime | None:
     )
     written = re.search(
         r"(?:中華民國)?\s*(?P<year>\d{2,4})\s*年\s*(?P<month>\d{1,2})\s*月\s*"
-        r"(?P<day>\d{1,2})\s*日(?:[^\d]{0,8}(?P<period>上午|下午)?\s*"
+        r"(?P<day>\d{1,2})\s*日(?:(?:(?!上午|下午)[^\d]){0,8}(?P<period>上午|下午)?\s*"
         r"(?P<hour>\d{1,2})?\s*時?\s*(?P<minute>\d{1,2})?\s*分?)?",
         value,
     )

@@ -82,7 +82,7 @@ values
   ('臺北關', 'CUSTOMS', '臺灣', 'customs.gov.tw'),
   ('臺中關', 'CUSTOMS', '臺灣', 'customs.gov.tw'),
   ('高雄關', 'CUSTOMS', '臺灣', 'customs.gov.tw')
-on conflict (canonical_name) do update set
+on conflict (canonical_name, jurisdiction) do update set
   organization_type = excluded.organization_type,
   jurisdiction = excluded.jurisdiction,
   official_domain = excluded.official_domain;
@@ -266,6 +266,7 @@ values
   ('20000000-0000-0000-0000-000000000009', 'DETAIL_PATTERN',
    'https://www.judicial.gov.tw/tw/', true,
    '只允許 /tw/cp-1913 詳細頁；/tw/dl 附件僅作官方連結，不抓檔')
-on conflict (source_id, endpoint_type, url) do update set
-  enabled = excluded.enabled,
-  notes = excluded.notes;
+-- Preserve operator-disabled endpoints and their reviewed notes. A registry
+-- bootstrap may add missing entries, but it must never reactivate an existing
+-- endpoint as a side effect of deployment.
+on conflict (source_id, endpoint_type, url) do nothing;

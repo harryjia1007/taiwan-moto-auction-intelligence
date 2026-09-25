@@ -39,6 +39,7 @@ adapter 使用持久 HTTP session，先驗證官方 POST form，再提交網站�
 - 只抽取同網域、無 query/fragment、符合 `/tw/dl-...html` 的官方附件網址為 `official_attachment_url` evidence。
 - 不請求、不鏡像附件內容，不讀取或快取任何圖片，`photo_urls` 永遠是空陣列。
 - `不得試車` 只形成 `can_test=NO`，不得推導 `can_start=NO`。沒有明文的發動、領牌、過戶、資格、價格或車況均維持 `UNKNOWN`。
+- 民國年拍賣時間保留官方的「上午／下午」語意；例如「下午 2 時 30 分」正規化為臺北時間 14:30，不提前判成已結束。
 - 已過拍賣時間只能標為 `EXPIRED`；頁面消失或時間已過不是 `SOLD` 證據。
 
 ## 可抽取欄位與限制

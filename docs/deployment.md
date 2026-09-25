@@ -22,6 +22,8 @@ Run `pnpm run doctor` before bootstrapping. The Supabase CLI packages PostgreSQL
 4. Add the production callback URL to Auth redirect URLs.
 5. Create and verify the owner account, then disable public sign-up in hosted Auth. Confirm that an arbitrary non-owner email cannot create an account or read operational data directly through Supabase.
 
+Private artifact retention is not yet automatic in the hosted environment. Each raw artifact has a calculated 12-month-or-later deadline, but the only deletion path is the operator-run `python -m ingest retention --source <adapter>` dry-run followed by an explicitly reviewed `--execute` with a privileged `DATABASE_URL` and private Storage credentials. The hosted ingestion workflow has no such database connection or retention job. Do not report an artifact as deleted until its Storage byte deletion and `artifact_tombstones` record have both been verified; establishing a scheduled, audited retention worker remains a release operations item.
+
 ## Vercel
 
 Use `apps/web` through the root `vercel.json`. Configure `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `OWNER_EMAIL`. Never configure `TM_FIXTURE_MODE=true` in production. The service-role key is not a frontend variable.

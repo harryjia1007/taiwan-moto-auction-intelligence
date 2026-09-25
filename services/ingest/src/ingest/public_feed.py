@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import unquote_plus, urlsplit, urlunsplit
@@ -12,7 +13,18 @@ from ingest.official_documents import official_document_urls
 
 
 _PLATE_TOKEN_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]{1,4}[-－][A-Za-z0-9]{1,4})(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
+    r"(?:[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4}[-－][A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4})"
+    r"(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
+)
+_PLAIN_PLATE_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z]{2,3}\d{3,4}|\d{3,4}[A-Z]{2,3})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_LABELED_PLAIN_PLATE_PATTERN = re.compile(
+    r"((?:車牌|車號|牌照)(?:號碼|號)?\s*[:：]?\s*)"
+    r"([A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{5,8})(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])",
+    re.IGNORECASE,
 )
 _VIN_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Za-z0-9])", re.IGNORECASE)
 _LABELED_VEHICLE_IDENTIFIER_PATTERN = re.compile(
@@ -144,7 +156,7 @@ def mask_public_plate(value: str) -> str | None:
     prefix that helps an owner recognise a listing, but never publish a complete
     plate. Malformed one-character values are suppressed instead of guessed.
     """
-    plate = value.strip()
+    plate = unicodedata.normalize("NFKC", value.strip())
     if not plate:
         return None
 
@@ -219,6 +231,16 @@ def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]
         _PERSON_ROLE_FALLBACK_PATTERN,
     ):
         sanitized = pattern.sub(lambda match: f"{match.group('role')}：已隱去", sanitized)
+    sanitized = _LABELED_PLAIN_PLATE_PATTERN.sub(
+        lambda match: f"{match.group(1)}{mask_public_plate(match.group(2)) or '車牌已隱藏'}",
+        sanitized,
+    )
+    # Apply plate-shaped fallback last: 0912-345-678 must first be removed as
+    # a telephone number, not partially masked as if it were a vehicle plate.
+    sanitized = _PLATE_TOKEN_PATTERN.sub(
+        lambda match: mask_public_plate(match.group(0)) or "車牌已隱藏",
+        sanitized,
+    )
     return sanitized
 
 
@@ -236,6 +258,40 @@ def _decode_for_public_safety(value: str) -> str:
 def _contains_known_identifier(value: str, identifiers: list[tuple[str, str]]) -> bool:
     decoded = _decode_for_public_safety(value).casefold()
     return any(identifier.casefold() in decoded for _, identifier in identifiers)
+
+
+def _contains_plate_token(value: str) -> bool:
+    return bool(_PLATE_TOKEN_PATTERN.search(_decode_for_public_safety(value)))
+
+
+def _contains_plate_token_in_url(value: str) -> bool:
+    decoded = _decode_for_public_safety(value)
+    parsed = urlsplit(decoded)
+    if re.search(r"(?:[?&](?:plate|license[_-]?plate|車牌|車號)=)[^&#]+", decoded, re.IGNORECASE):
+        return True
+    if (
+        (parsed.hostname or "").lower() == "www.judicial.gov.tw"
+        and not parsed.query
+        and not parsed.fragment
+        and re.fullmatch(
+            r"/tw/dl-\d+-(?:[0-9a-f]{8}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.html",
+            parsed.path,
+            flags=re.IGNORECASE,
+        )
+    ):
+        # A fixed-length opaque document ID is not a vehicle plate, even if
+        # one four-character hexadecimal UUID segment resembles a plate.
+        return False
+    # Judicial main-site route prefixes (cp-1913, dl-54321, lp-1913) are
+    # published CMS routing IDs, not plates. Preserve those official links,
+    # while still rejecting any plate-shaped token in the rest of the URL.
+    without_cms_route = re.sub(
+        r"(?<=/)(?:cp|dl|lp)-\d+(?=[-./?#]|$)",
+        "official-route",
+        decoded,
+        flags=re.IGNORECASE,
+    )
+    return bool(_PLATE_TOKEN_PATTERN.search(without_cms_route))
 
 
 def _contains_public_personal_data(value: str, *, include_phone: bool = True) -> bool:
@@ -281,6 +337,7 @@ def _sanitize_official_url(
         return fallback
     if (
         _contains_known_identifier(value, identifiers)
+        or _contains_plate_token_in_url(value)
         or _VIN_PATTERN.search(_decode_for_public_safety(value))
         or _contains_public_personal_data(value)
     ):
@@ -303,6 +360,7 @@ def _public_documents(
     ):
         if (
             _contains_known_identifier(candidate, identifiers)
+            or _contains_plate_token_in_url(candidate)
             or _VIN_PATTERN.search(_decode_for_public_safety(candidate))
             # Judicial main-site document links end in an opaque UUID-like
             # token that can begin with eight digits. Do not misclassify that
@@ -347,6 +405,7 @@ def _public_photo_urls(
             or parsed.username is not None
             or parsed.password is not None
             or _contains_known_identifier(candidate, identifiers)
+            or _contains_plate_token_in_url(candidate)
             or _VIN_PATTERN.search(_decode_for_public_safety(candidate))
             or _contains_public_personal_data(candidate)
         ):
@@ -392,6 +451,8 @@ def public_listing_payload(
     public_source_record_id = record.source_record_id
     if (
         _contains_known_identifier(public_source_record_id, identifiers)
+        or _contains_plate_token(public_source_record_id)
+        or _PLAIN_PLATE_TOKEN_PATTERN.search(unicodedata.normalize("NFKC", public_source_record_id))
         or _VIN_PATTERN.search(_decode_for_public_safety(public_source_record_id))
         or _contains_public_personal_data(public_source_record_id)
     ):

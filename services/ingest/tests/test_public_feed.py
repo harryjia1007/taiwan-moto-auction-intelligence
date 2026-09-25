@@ -61,6 +61,7 @@ def test_public_feed_never_publishes_plate_without_a_verified_end_time():
         ("1234-AB", "1234-**"),
         ("ABC123", "ABC***"),
         ("ABC-123 等 2 面", "ABC-*** 等 2 面"),
+        ("ＡＢＣ－１２３", "ABC-***"),
         ("A", None),
     ],
 )
@@ -122,6 +123,42 @@ def test_public_feed_redacts_identifier_leaks_from_text_urls_and_media():
     assert payload["photo_urls"] == []
     for private_value in ("ABC-123", "EN99887766", "FR12345678", "VINSECRET12345678", "02-12345678", "owner@example.com"):
         assert private_value not in serialized
+
+
+def test_public_feed_redacts_plate_tokens_even_when_parser_misses_identifier() -> None:
+    item = record(
+        identifiers=[],
+        source_record_id="ABC-123",
+        official_url="https://shwoo.gov.taipei/item/ABC-123?plate=DEF-456",
+        official_title="普通重型機車 ABC-123",
+        official_case_number="車牌 DEF-456",
+        fee_notes=["車牌 GHI-789，另查證", "車牌 ＪＫＬ－３５７，另查證"],
+    )
+
+    payload = public_listing_payload(item)
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://shwoo.gov.taipei/"
+    assert payload["official_title"] == "普通重型機車 ABC-***"
+    assert payload["official_case_number"] == "車牌 DEF-***"
+    assert payload["fee_notes"] == ["車牌 GHI-***，另查證", "車牌 JKL-***，另查證"]
+    assert payload["plate_number"] is None
+    for complete_plate in ("ABC-123", "DEF-456", "GHI-789", "ＪＫＬ－３５７"):
+        assert complete_plate not in str(payload)
+
+
+def test_public_feed_redacts_unhyphenated_labeled_plate_without_identifier() -> None:
+    payload = public_listing_payload(record(
+        identifiers=[],
+        source_record_id="ABC123",
+        official_url="https://shwoo.gov.taipei/item/123?plate=ABC123",
+        official_title="車牌 ABC123 普通重型機車",
+    ))
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://shwoo.gov.taipei/"
+    assert payload["official_title"] == "車牌 ABC*** 普通重型機車"
+    assert "ABC123" not in str(payload)
 
 
 def test_public_feed_falls_back_when_official_url_host_does_not_match_source() -> None:

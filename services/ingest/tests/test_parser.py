@@ -325,6 +325,28 @@ def test_pcc_court_disposal_is_not_mislabeled_as_judicial_execution() -> None:
     assert record.registration_status == RegistrationStatus.SCRAP_ONLY
     assert record.disposal_origin == "SCRAP_DISPOSAL"
     assert record.bulk_lot is True  # The official page does not separate vehicle identities.
+    assert record.lot_size == 1  # Internal lower bound, not an official count.
+    assert not any(e.field_name == "lot_size" for e in record.evidence)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "普通重型機車一輛公開標售",
+        "普通重型機車壹輛公開標售",
+        "公開標售乙輛普通重型機車",
+    ],
+)
+def test_pcc_explicit_chinese_single_count_is_not_a_bulk_lot(title: str) -> None:
+    source = artifact("pcc_court_scrap.html")
+    source.content = source.content.replace("標售本院115年奉准報廢機車".encode(), title.encode())
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=single-chinese-count"
+
+    record = parse_pcc_detail(pcc_item("single-chinese-count", title), source)
+
+    assert record.lot_size == 1
+    assert record.bulk_lot is False
+    assert any(e.field_name == "lot_size" and e.normalized_value == 1 and e.source_text == title for e in record.evidence)
 
 
 def test_pcc_impounded_batch_preserves_count_and_origin() -> None:
