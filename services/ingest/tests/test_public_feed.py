@@ -124,6 +124,32 @@ def test_public_feed_redacts_identifier_leaks_from_text_urls_and_media():
         assert private_value not in serialized
 
 
+def test_public_feed_masks_plate_like_text_even_if_source_parser_missed_the_identifier():
+    unparsed_plate = "KSS–7890"
+    item = record(
+        identifiers=[],
+        source_record_id=f"notice-{unparsed_plate}",
+        official_url="https://www.tcy.moj.gov.tw/notice/KSS%E2%80%937890/post",
+        official_title=f"普通重型機車拍賣，車牌 {unparsed_plate}；115-08-01 公告",
+        official_case_number=f"車牌 {unparsed_plate}",
+        evidence=[EvidenceRef(
+            field_name="official_attachment_url",
+            normalized_value="https://www.tcy.moj.gov.tw/media/KSS%E2%80%937890.pdf",
+            source_text="官方附件",
+        )],
+    )
+
+    payload = public_listing_payload(item, source_adapter="moj_enforcement_cms")
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
+    assert payload["official_title"] == "普通重型機車拍賣，車牌 KSS–7***；115-08-01 公告"
+    assert payload["official_case_number"] == "車牌 KSS–7***"
+    assert payload["plate_number"] is None
+    assert payload["documents"] == []
+    assert unparsed_plate not in str(payload)
+
+
 def test_public_feed_projects_only_safe_official_attachment_links_without_evidence_text():
     item = record(
         identifiers=[

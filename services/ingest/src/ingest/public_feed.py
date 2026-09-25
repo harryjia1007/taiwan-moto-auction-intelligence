@@ -11,7 +11,7 @@ from ingest.models import ParsedAuctionRecord, VehicleClass, VehicleType
 
 
 _PLATE_TOKEN_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]{1,4}[-－][A-Za-z0-9]{1,4})(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]{1,4}[-－–—][A-Za-z0-9]{1,4})(?![A-Za-z0-9])"
 )
 _VIN_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Za-z0-9])", re.IGNORECASE)
 _LABELED_VEHICLE_IDENTIFIER_PATTERN = re.compile(
@@ -100,6 +100,25 @@ def _known_identifier_replacements(identifiers: list[tuple[str, str]]) -> list[t
     return sorted(dict.fromkeys(replacements), key=lambda item: len(item[0]), reverse=True)
 
 
+def _contains_unparsed_plate(value: str) -> bool:
+    """Catch plausible plates that were absent from a source parser's identifiers.
+
+    This is a public-output safety net, not evidence that the token is a plate.
+    Dates alone are left intact; ambiguous letter-and-digit tokens are withheld.
+    """
+    return any(
+        re.search(r"[A-Za-z]", match.group(0)) and re.search(r"\d", match.group(0))
+        for match in _PLATE_TOKEN_PATTERN.finditer(unquote(value))
+    )
+
+
+def _mask_unparsed_plate_token(match: re.Match[str]) -> str:
+    token = match.group(0)
+    if not _contains_unparsed_plate(token):
+        return token
+    return mask_public_plate(token) or "車牌已隱藏"
+
+
 def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]) -> str | None:
     if value is None:
         return None
@@ -113,6 +132,7 @@ def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]
             sanitized,
             flags=re.IGNORECASE,
         )
+    sanitized = _PLATE_TOKEN_PATTERN.sub(_mask_unparsed_plate_token, sanitized)
     sanitized = _VIN_PATTERN.sub("車身識別碼已隱藏", sanitized)
     sanitized = _LABELED_VEHICLE_IDENTIFIER_PATTERN.sub(r"\1已隱藏", sanitized)
     sanitized = _PHONE_PATTERN.sub("聯絡電話已隱藏", sanitized)
@@ -139,6 +159,7 @@ def _sanitize_official_url(value: str, identifiers: list[tuple[str, str]]) -> st
     """Keep a working official link, but fall back to its origin if its URL leaks an identifier."""
     if (
         not _contains_known_identifier(value, identifiers)
+        and not _contains_unparsed_plate(value)
         and not _VIN_PATTERN.search(unquote(value))
         and not _contains_public_personal_data(value)
     ):
@@ -181,6 +202,7 @@ def _public_documents(
             or port not in (None, 443)
             or candidate in seen
             or _contains_known_identifier(candidate, identifiers)
+            or _contains_unparsed_plate(candidate)
             or _VIN_PATTERN.search(unquote(candidate))
             or _contains_public_personal_data(candidate)
         ):
@@ -218,6 +240,7 @@ def _public_photo_urls(
             or parsed.username is not None
             or parsed.password is not None
             or _contains_known_identifier(candidate, identifiers)
+            or _contains_unparsed_plate(candidate)
             or _VIN_PATTERN.search(unquote(candidate))
             or _contains_public_personal_data(candidate)
         ):
@@ -262,6 +285,7 @@ def public_listing_payload(
     public_source_record_id = record.source_record_id
     if (
         _contains_known_identifier(public_source_record_id, identifiers)
+        or _contains_unparsed_plate(public_source_record_id)
         or _VIN_PATTERN.search(public_source_record_id)
         or _contains_public_personal_data(public_source_record_id)
     ):
