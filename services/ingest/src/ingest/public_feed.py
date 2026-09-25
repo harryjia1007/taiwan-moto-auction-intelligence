@@ -14,16 +14,23 @@ from ingest.official_documents import official_document_urls
 
 _PLATE_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
-    r"(?:[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4}[-－][A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4})"
+    r"(?:[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4}[-－–—][A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4})"
     r"(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
 )
-_PLAIN_PLATE_TOKEN_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Z]{2,3}\d{3,4}|\d{3,4}[A-Z]{2,3})(?![A-Za-z0-9])",
-    re.IGNORECASE,
+_NUMERIC_PLATE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])[0-9０-９]{3,4}[-－–—][0-9０-９]{3,4}"
+    r"(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
 )
-_LABELED_PLAIN_PLATE_PATTERN = re.compile(
-    r"((?:車牌|車號|牌照)(?:號碼|號)?\s*[:：]?\s*)"
-    r"([A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{5,8})(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])",
+_COMPACT_PLATE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
+    r"(?:[A-Za-zＡ-Ｚａ-ｚ]{1,4}[0-9０-９]{3,4}|[0-9０-９]{3,4}[A-Za-zＡ-Ｚａ-ｚ]{1,4})"
+    r"(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])"
+)
+_LABELED_PLATE_PATTERN = re.compile(
+    r"(?:車牌(?:號碼|號)?|牌照(?:號碼|號)?|車號)\s*(?:[:：=]|為)?\s*"
+    r"(?P<plate>[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{2,4}[-－–—][A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{2,4}"
+    r"|[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{5,8})"
+    r"(?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])",
     re.IGNORECASE,
 )
 _VIN_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Za-z0-9])", re.IGNORECASE)
@@ -36,6 +43,7 @@ _PHONE_PATTERN = re.compile(
     r"(?:\+?886[-－ ]?9|09)\d{2}(?:[-－ ]?\d{3}){2}"
     r"|(?:\+?886[-－ ]?|0)\d{1,2}[-－ ]?\d{3,4}[-－ ]?\d{4}"
     r"|\(\s*0?\d{1,2}\s*\)\s*\d{3,4}[-－ ]?\d{4}"
+    r"|(?:\(0[2-8]\d{0,2}\)|0[2-8]\d{0,2})[-－–— ]+\d{3,4}[-－–— ]+\d{4}"
     r")(?:\s*(?:#|分機|ext\.?)\s*\d+)?(?!\d)",
     re.IGNORECASE,
 )
@@ -193,15 +201,66 @@ def _record_identifiers(record: ParsedAuctionRecord) -> list[tuple[str, str]]:
     return list(dict.fromkeys(values))
 
 
-def _known_identifier_replacements(identifiers: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def _unparsed_labeled_plates(record: ParsedAuctionRecord) -> list[tuple[str, str]]:
+    """Treat official plate-labelled tokens as private even if a parser missed them."""
+    fields = (
+        record.official_title, record.title, record.official_case_number,
+        record.organization, record.location, record.description,
+        record.brand, record.model, record.color, *record.fee_notes,
+    )
+    return list(dict.fromkeys(
+        ("POSSIBLE_PLATE", match.group("plate"))
+        for field in fields if field
+        for match in _LABELED_PLATE_PATTERN.finditer(field)
+    ))
+
+
+def _known_identifier_replacements(
+    identifiers: list[tuple[str, str]], *, show_masked_plates: bool,
+) -> list[tuple[str, str]]:
     replacements: list[tuple[str, str]] = []
     for identifier_type, value in identifiers:
-        replacement = mask_public_plate(value) if identifier_type == "PLATE" else "車輛識別碼已隱藏"
-        replacements.append((value, replacement or "車牌已隱藏"))
+        if identifier_type == "PLATE":
+            replacement = mask_public_plate(value) if show_masked_plates else None
+            replacement = replacement or "已隱藏"
+        elif identifier_type == "POSSIBLE_PLATE":
+            replacement = "已隱藏"
+        else:
+            replacement = "車輛識別碼已隱藏"
+        replacements.append((value, replacement))
     return sorted(dict.fromkeys(replacements), key=lambda item: len(item[0]), reverse=True)
 
 
-def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]) -> str | None:
+def _contains_unparsed_plate(value: str) -> bool:
+    """Catch plausible plates that were absent from a source parser's identifiers.
+
+    This is a public-output safety net, not evidence that the token is a plate.
+    Short month/day dates are left intact; longer ambiguous tokens in URLs or
+    source IDs are withheld even if they might be non-plate identifiers.
+    """
+    decoded = unicodedata.normalize("NFKC", _decode_for_public_safety(value))
+    return bool(
+        _NUMERIC_PLATE_PATTERN.search(decoded)
+        or _COMPACT_PLATE_PATTERN.search(decoded)
+    ) or any(
+        re.search(r"[A-Za-z]", match.group(0)) and re.search(r"[0-9]", match.group(0))
+        for match in _PLATE_TOKEN_PATTERN.finditer(decoded)
+    )
+
+
+def _mask_unparsed_plate_token(match: re.Match[str], *, show_masked_plates: bool) -> str:
+    token = match.group(0)
+    if not _contains_unparsed_plate(token):
+        return token
+    return (mask_public_plate(token) if show_masked_plates else None) or "已隱藏"
+
+
+def _sanitize_public_text(
+    value: str | None,
+    replacements: list[tuple[str, str]],
+    *,
+    show_masked_plates: bool = True,
+) -> str | None:
     if value is None:
         return None
     sanitized = value
@@ -231,16 +290,16 @@ def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]
         _PERSON_ROLE_FALLBACK_PATTERN,
     ):
         sanitized = pattern.sub(lambda match: f"{match.group('role')}：已隱去", sanitized)
-    sanitized = _LABELED_PLAIN_PLATE_PATTERN.sub(
-        lambda match: f"{match.group(1)}{mask_public_plate(match.group(2)) or '車牌已隱藏'}",
-        sanitized,
-    )
     # Apply plate-shaped fallback last: 0912-345-678 must first be removed as
     # a telephone number, not partially masked as if it were a vehicle plate.
     sanitized = _PLATE_TOKEN_PATTERN.sub(
-        lambda match: mask_public_plate(match.group(0)) or "車牌已隱藏",
+        lambda match: _mask_unparsed_plate_token(match, show_masked_plates=show_masked_plates),
         sanitized,
     )
+    # A source parser may miss a plate printed without a dash or label. Treat
+    # such compact letter-and-digit tokens as private rather than guessing
+    # whether they are plates or model codes in the anonymous projection.
+    sanitized = _COMPACT_PLATE_PATTERN.sub("已隱藏", sanitized)
     return sanitized
 
 
@@ -285,13 +344,14 @@ def _contains_plate_token_in_url(value: str) -> bool:
     # Judicial main-site route prefixes (cp-1913, dl-54321, lp-1913) are
     # published CMS routing IDs, not plates. Preserve those official links,
     # while still rejecting any plate-shaped token in the rest of the URL.
+    path_and_query = urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
     without_cms_route = re.sub(
         r"(?<=/)(?:cp|dl|lp)-\d+(?=[-./?#]|$)",
         "official-route",
-        decoded,
+        path_and_query,
         flags=re.IGNORECASE,
     )
-    return bool(_PLATE_TOKEN_PATTERN.search(without_cms_route))
+    return _contains_unparsed_plate(without_cms_route)
 
 
 def _contains_public_personal_data(value: str, *, include_phone: bool = True) -> bool:
@@ -433,8 +493,10 @@ def public_listing_payload(
     # Keep a plate for at most 30 days after the official end time, then clear it
     # from the public projection even though the private evidence is retained.
     plate_public = record.ends_at is not None and record.ends_at >= now - timedelta(days=30)
-    identifiers = _record_identifiers(record)
-    replacements = _known_identifier_replacements(identifiers)
+    identifiers = list(dict.fromkeys([*_record_identifiers(record), *_unparsed_labeled_plates(record)]))
+    replacements = _known_identifier_replacements(identifiers, show_masked_plates=plate_public)
+    def public_text(value: str | None) -> str | None:
+        return _sanitize_public_text(value, replacements, show_masked_plates=plate_public)
     plate_values = [
         entry.original_value
         for entry in record.identifiers
@@ -452,7 +514,7 @@ def public_listing_payload(
     if (
         _contains_known_identifier(public_source_record_id, identifiers)
         or _contains_plate_token(public_source_record_id)
-        or _PLAIN_PLATE_TOKEN_PATTERN.search(unicodedata.normalize("NFKC", public_source_record_id))
+        or _contains_unparsed_plate(public_source_record_id)
         or _VIN_PATTERN.search(_decode_for_public_safety(public_source_record_id))
         or _contains_public_personal_data(public_source_record_id)
     ):
@@ -493,12 +555,12 @@ def public_listing_payload(
     payload: dict[str, Any] = {
         "id": f"{source_adapter}-{public_source_record_id}",
         "source_adapter": source_adapter,
-        "source_name": _sanitize_public_text(source_name, replacements) or "官方拍賣來源",
+        "source_name": public_text(source_name) or "官方拍賣來源",
         "source_record_id": public_source_record_id,
         "official_url": _sanitize_official_url(str(record.official_url), source_adapter, identifiers),
-        "official_title": _sanitize_public_text(record.official_title, replacements) or "車輛拍賣公告",
-        "official_case_number": _sanitize_public_text(record.official_case_number, replacements),
-        "organization_name": _sanitize_public_text(record.organization, replacements) or source_name,
+        "official_title": public_text(record.official_title) or "車輛拍賣公告",
+        "official_case_number": public_text(record.official_case_number),
+        "organization_name": public_text(record.organization) or public_text(source_name) or "官方拍賣來源",
         "disposal_origin": record.disposal_origin,
         "auction_status": record.status.value,
         "auction_round": record.auction_round,
@@ -513,24 +575,24 @@ def public_listing_payload(
         "vehicle_type": public_vehicle_type,
         "vehicle_category": "UNKNOWN" if mixed_vehicle_lot else record.vehicle_class.value,
         "car_category": "UNKNOWN" if mixed_vehicle_lot else record.car_category.value,
-        "brand_name": None if ambiguous_multi_vehicle_specs else _sanitize_public_text(record.brand, replacements),
-        "model_name": None if ambiguous_multi_vehicle_specs else _sanitize_public_text(record.model, replacements),
+        "brand_name": None if ambiguous_multi_vehicle_specs else public_text(record.brand),
+        "model_name": None if ambiguous_multi_vehicle_specs else public_text(record.model),
         "manufacture_year": None if ambiguous_multi_vehicle_specs else record.manufacture_year,
         "manufacture_month": None if ambiguous_multi_vehicle_specs else record.manufacture_month,
         "displacement_cc": None if ambiguous_multi_vehicle_specs else record.displacement_cc,
-        "color": None if ambiguous_multi_vehicle_specs else _sanitize_public_text(record.color, replacements),
+        "color": None if ambiguous_multi_vehicle_specs else public_text(record.color),
         "mileage_km": None if ambiguous_multi_vehicle_specs else record.mileage_km,
         "plate_number": "、".join(plates) if plate_public and plates else None,
         "has_key": record.has_key.value,
         "can_start": record.can_start.value,
         "can_test": record.can_test.value,
-        "location": _sanitize_public_text(record.location, replacements),
+        "location": public_text(record.location),
         "description": None,
         "condition_summary": public_condition,
         "fee_notes": [
             sanitized
             for note in record.fee_notes
-            if (sanitized := _sanitize_public_text(note, replacements))
+            if (sanitized := public_text(note))
         ],
         "lot_size": record.lot_size,
         "bulk_lot": record.bulk_lot or mixed_vehicle_lot or len(record.vehicle_units) > 1,

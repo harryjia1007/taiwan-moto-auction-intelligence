@@ -53,6 +53,15 @@ def test_public_feed_never_publishes_plate_without_a_verified_end_time():
     assert public_listing_payload(record(ends_at=None))["plate_number"] is None
 
 
+def test_public_feed_suppresses_known_plate_in_text_without_a_verified_end_time():
+    item = record(ends_at=None, official_title="普通重型機車，車牌 ABC-123")
+    payload = public_listing_payload(item)
+
+    assert payload["plate_number"] is None
+    assert payload["official_title"] == "普通重型機車，車牌 已隱藏"
+    assert "ABC-123" not in str(payload)
+
+
 @pytest.mark.parametrize(
     ("plate", "masked"),
     [
@@ -140,11 +149,165 @@ def test_public_feed_redacts_plate_tokens_even_when_parser_misses_identifier() -
     assert payload["source_record_id"].startswith("redacted-")
     assert payload["official_url"] == "https://shwoo.gov.taipei/"
     assert payload["official_title"] == "普通重型機車 ABC-***"
-    assert payload["official_case_number"] == "車牌 DEF-***"
-    assert payload["fee_notes"] == ["車牌 GHI-***，另查證", "車牌 JKL-***，另查證"]
+    assert payload["official_case_number"] == "車牌 已隱藏"
+    assert payload["fee_notes"] == ["車牌 已隱藏，另查證", "車牌 已隱藏，另查證"]
     assert payload["plate_number"] is None
     for complete_plate in ("ABC-123", "DEF-456", "GHI-789", "ＪＫＬ－３５７"):
         assert complete_plate not in str(payload)
+
+
+@pytest.mark.parametrize(
+    "synthetic_phone",
+    [
+        "02-123-4567",
+        "02-1234-5678",
+        "(02) 1234-5678",
+        "02 1234 5678",
+        "02－123－4567",
+        "02–123–4567",
+    ],
+)
+def test_public_feed_redacts_split_landlines_in_every_public_text_field(synthetic_phone: str) -> None:
+    item = record(
+        identifiers=[],
+        official_title=f"公告洽詢 {synthetic_phone}",
+        official_case_number=f"案號備註 {synthetic_phone}",
+        organization=f"承辦單位 {synthetic_phone}",
+        brand=f"廠牌備註 {synthetic_phone}",
+        model=f"型號備註 {synthetic_phone}",
+        color=f"顏色備註 {synthetic_phone}",
+        location=f"洽詢 {synthetic_phone}",
+        fee_notes=[f"費用洽詢 {synthetic_phone}"],
+    )
+
+    payload = public_listing_payload(item, source_name=f"來源 {synthetic_phone}")
+
+    for field in (
+        "source_name", "official_title", "official_case_number", "organization_name",
+        "brand_name", "model_name", "color", "location",
+    ):
+        assert "聯絡電話已隱藏" in payload[field]
+    assert payload["fee_notes"] == ["費用洽詢 聯絡電話已隱藏"]
+    assert synthetic_phone not in str(payload)
+
+
+def test_public_feed_rejects_split_landline_in_source_id_and_official_links() -> None:
+    synthetic_phone = "(02) 1234 5678"
+    encoded_phone = "%2802%29%201234%205678"
+    item = record(
+        identifiers=[],
+        source_record_id=f"notice-{synthetic_phone}",
+        official_url=f"https://shwoo.gov.taipei/item?contact={encoded_phone}",
+        evidence=[EvidenceRef(
+            field_name="official_attachment_url",
+            normalized_value=f"https://shwoo.gov.taipei/file/notice.pdf?contact={encoded_phone}",
+            source_text="合成測試附件",
+        )],
+    )
+
+    payload = public_listing_payload(item)
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://shwoo.gov.taipei/"
+    assert payload["documents"] == []
+    assert synthetic_phone not in str(payload)
+    assert encoded_phone not in str(payload)
+
+
+def test_public_feed_preserves_dates_prices_and_existing_contiguous_phone_redaction() -> None:
+    item = record(
+        identifiers=[],
+        official_title="115-09-25 公告；2026/09/25 拍賣；底價 NT$18,000",
+        location="聯絡 02-12345678",
+    )
+
+    payload = public_listing_payload(item)
+
+    assert payload["official_title"] == "115-09-25 公告；2026/09/25 拍賣；底價 NT$18,000"
+    assert payload["location"] == "聯絡 聯絡電話已隱藏"
+
+
+def test_public_feed_masks_plate_like_text_even_if_source_parser_missed_the_identifier():
+    unparsed_plate = "KSS–7890"
+    item = record(
+        identifiers=[],
+        source_record_id=f"notice-{unparsed_plate}",
+        official_url="https://www.tcy.moj.gov.tw/notice/KSS%E2%80%937890/post",
+        official_title=f"普通重型機車拍賣，車牌 {unparsed_plate}；115-08-01 公告",
+        official_case_number=f"車牌 {unparsed_plate}",
+        evidence=[EvidenceRef(
+            field_name="official_attachment_url",
+            normalized_value="https://www.tcy.moj.gov.tw/media/KSS%E2%80%937890.pdf",
+            source_text="官方附件",
+        )],
+    )
+
+    payload = public_listing_payload(item, source_adapter="moj_enforcement_cms")
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
+    assert payload["official_title"] == "普通重型機車拍賣，車牌 已隱藏；115-08-01 公告"
+    assert payload["official_case_number"] == "車牌 已隱藏"
+    assert payload["plate_number"] is None
+    assert payload["documents"] == []
+    assert unparsed_plate not in str(payload)
+
+
+@pytest.mark.parametrize(
+    ("label", "plate"),
+    [
+        ("車牌", "123-4567"),
+        ("車牌", "ABC1234"),
+        ("牌照號碼", "1234567"),
+        ("車號", "AB-1234"),
+    ],
+)
+def test_public_feed_suppresses_labeled_unparsed_plates_everywhere(label: str, plate: str):
+    item = record(
+        identifiers=[], ends_at=None,
+        source_record_id=f"notice-{plate}",
+        official_url=f"https://www.tcy.moj.gov.tw/notice/{plate}/post",
+        official_title=f"普通重型機車拍賣，{label}：{plate}",
+        official_case_number=f"{label} {plate}",
+        location=f"保管地點，{label}為{plate}",
+        evidence=[EvidenceRef(
+            field_name="official_attachment_url",
+            normalized_value=f"https://www.tcy.moj.gov.tw/media/{plate}.pdf",
+            source_text="官方附件",
+        )],
+    )
+
+    payload = public_listing_payload(item, source_adapter="moj_enforcement_cms")
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
+    assert payload["documents"] == []
+    assert payload["plate_number"] is None
+    assert "已隱藏" in payload["official_title"]
+    assert plate not in str(payload)
+
+
+def test_public_feed_suppresses_unlabeled_compact_plate_in_public_text() -> None:
+    item = record(
+        identifiers=[], ends_at=None,
+        source_record_id="notice-ABC1234",
+        official_url="https://www.tcy.moj.gov.tw/notice/ABC1234/post",
+        official_title="普通重型機車 ABC1234 動產拍賣",
+        official_case_number="ABC1234",
+        description="標的為機車 ABC1234，完整來源說明不應公開。",
+        fee_notes=["相關費用請查 ABC1234 公告"],
+    )
+
+    payload = public_listing_payload(item, source_adapter="moj_enforcement_cms")
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
+    assert payload["official_title"] == "普通重型機車 已隱藏 動產拍賣"
+    assert payload["official_case_number"] == "已隱藏"
+    assert payload["description"] is None
+    assert payload["fee_notes"] == ["相關費用請查 已隱藏 公告"]
+    assert payload["plate_number"] is None
+    assert "ABC1234" not in str(payload)
 
 
 def test_public_feed_redacts_unhyphenated_labeled_plate_without_identifier() -> None:
@@ -157,7 +320,7 @@ def test_public_feed_redacts_unhyphenated_labeled_plate_without_identifier() -> 
 
     assert payload["source_record_id"].startswith("redacted-")
     assert payload["official_url"] == "https://shwoo.gov.taipei/"
-    assert payload["official_title"] == "車牌 ABC*** 普通重型機車"
+    assert payload["official_title"] == "車牌 已隱藏 普通重型機車"
     assert "ABC123" not in str(payload)
 
 
@@ -193,7 +356,6 @@ def test_public_feed_unknown_source_uses_project_fallback_instead_of_arbitrary_u
     assert public_listing_payload(item, source_adapter="unknown")["official_url"] == (
         "https://harryjia.com/projects/taiwan-moto-auction/"
     )
-
 
 def test_public_feed_projects_only_safe_official_attachment_links_without_evidence_text():
     item = record(
