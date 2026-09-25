@@ -7,6 +7,7 @@ import pytest
 
 from ingest.models import AuctionStatus, BidEligibility, CarCategory, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass, VehicleType
 from ingest.parser import car_category_from_official_text, integer, motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime, vehicle_type_from_official_text
+from ingest.public_feed import public_listing_payload
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -360,6 +361,76 @@ def test_pcc_impounded_batch_preserves_count_and_origin() -> None:
     assert record.reserve_price == 134000
     assert record.deposit == 2500
     assert record.vehicle_units == []
+
+
+def test_pcc_explicit_zero_motorcycles_is_car_only_in_public_projection() -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=synthetic-zero-moto"
+    title = "標售逾期未領回車輛案(自小客車3輛、機車0輛)"
+
+    record = parse_pcc_detail(pcc_item("synthetic-zero-moto", title), source)
+    public = public_listing_payload(record, source_adapter="pcc")
+
+    assert record.vehicle_type == VehicleType.CAR
+    assert record.car_category == CarCategory.PASSENGER
+    assert record.vehicle_class == VehicleClass.UNKNOWN
+    assert record.lot_size == 3
+    assert record.bulk_lot is True
+    assert any(e.field_name == "vehicle_type" and e.source_text == title for e in record.evidence)
+    assert any(e.field_name == "lot_size" and e.normalized_value == 3 and e.source_text == title for e in record.evidence)
+    assert public["vehicle_type"] == "CAR"
+    assert public["car_category"] == "PASSENGER"
+    assert public["lot_size"] == 3
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_type", "expected_count"),
+    [
+        ("標售逾期未領回車輛案(自小客車0輛、普通重型機車2輛)", VehicleType.MOTORCYCLE, 2),
+        ("標售逾期未領回車輛案(自小客車3輛、機車1輛)", VehicleType.MIXED, 4),
+        ("標售逾期未領回汽機車案(自小客車3輛、機車0輛)", VehicleType.CAR, 3),
+        ("標售逾期未領回車輛案(3輛自小客車、機車零輛)", VehicleType.CAR, 3),
+        ("標售逾期未領回車輛案(自小客車3輛、零輛機車)", VehicleType.CAR, 3),
+    ],
+)
+def test_pcc_explicit_family_counts_do_not_invent_another_vehicle_type(
+    title: str, expected_type: VehicleType, expected_count: int,
+) -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    source.content = source.content.replace(
+        "標售逾期未領回車輛案(自小客車3輛、機車0輛)".encode(), title.encode(),
+    )
+    source.checksum_sha256 = sha256(source.content).hexdigest()
+
+    record = parse_pcc_detail(pcc_item("synthetic-counted-lot", title), source)
+
+    assert record.vehicle_type == expected_type
+    assert record.lot_size == expected_count
+
+
+def test_pcc_uncounted_additional_motorcycles_keep_total_unconfirmed() -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    title = "標售逾期未領回車輛案(自小客車3輛、機車0輛，另有機車一批)"
+    source.content = source.content.replace(
+        "標售逾期未領回車輛案(自小客車3輛、機車0輛)".encode(), title.encode(),
+    )
+
+    record = parse_pcc_detail(pcc_item("synthetic-uncounted-lot", title), source)
+
+    assert record.vehicle_type == VehicleType.MIXED
+    assert record.bulk_lot is True
+    assert not any(e.field_name == "lot_size" for e in record.evidence)
+
+
+def test_pcc_exhaustive_zero_vehicle_title_fails_closed() -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    title = "標售逾期未領回車輛案(自小客車0輛、機車0輛)"
+    source.content = source.content.replace(
+        "標售逾期未領回車輛案(自小客車3輛、機車0輛)".encode(), title.encode(),
+    )
+
+    with pytest.raises(ValueError, match="zero vehicles"):
+        parse_pcc_detail(pcc_item("synthetic-no-vehicles", title), source)
 
 
 def test_pcc_compatibility_glyph_scrap_mixed_lot_stays_out_of_regular_market() -> None:

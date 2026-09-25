@@ -1117,14 +1117,47 @@ def parse_pcc_detail(item: DiscoveredItem, artifact: RawArtifact) -> ParsedAucti
     # An explicit Chinese singular count proves one vehicle just as "1 輛"
     # does. Without an explicit count we deliberately retain the notice as a
     # lot of unknown cardinality instead of inventing one identified vehicle.
-    count_token = r"(\d+|一|壹|乙)"
-    count_matches = list(re.finditer(rf"{vehicle_noun}\s*{count_token}\s*[輛台部]", normalized_title))
-    if not count_matches:
-        count_matches = list(re.finditer(rf"{count_token}\s*[輛台部][^，。]{{0,8}}{vehicle_noun}", normalized_title))
-    vehicle_count = (
-        sum(int(match.group(1)) if match.group(1).isdigit() else 1 for match in count_matches)
-        if count_matches else None
+    count_token = r"(?:\d+|[零〇○一壹乙])"
+    count_matches = list(re.finditer(rf"(?P<noun>{vehicle_noun})\s*(?P<count>{count_token})\s*[輛台部]", normalized_title))
+    reverse_count = rf"(?P<count>{count_token})\s*[輛台部][^，。、()（）;；]{{0,8}}?(?P<noun>{vehicle_noun})"
+    for match in re.finditer(reverse_count, normalized_title):
+        if not any(match.start() < previous.end() and previous.start() < match.end() for previous in count_matches):
+            count_matches.append(match)
+    count_matches.sort(key=lambda match: match.start())
+    uncounted_title = normalized_title
+    for match in reversed(count_matches):
+        uncounted_title = uncounted_title[:match.start()] + uncounted_title[match.end():]
+    # A generic 「汽機車」 heading is not an additional vehicle when the title
+    # then enumerates both families. Other uncounted car/motorcycle nouns mean
+    # the stated counts may be partial, so the lot total remains unconfirmed.
+    generic_mixed_heading = bool(re.search(r"汽(?:、|及|與|和)?機車", uncounted_title))
+    uncounted_title = re.sub(r"汽(?:、|及|與|和)?機車", "", uncounted_title)
+    uncounted_family = bool(MOTORCYCLE_PATTERN.search(uncounted_title) or CAR_PATTERN.search(uncounted_title))
+    # An official breakdown such as 「小客車3輛、機車0輛」 proves that this
+    # particular lot has no motorcycles. A bare mention of both nouns does not.
+    # Do not apply the override if a further uncounted noun could advertise
+    # another vehicle group (e.g. 「機車0輛及機車一批」).
+    family_counts: dict[VehicleType, int] = {}
+    for match in count_matches:
+        family = VehicleType.MOTORCYCLE if MOTORCYCLE_PATTERN.search(match.group("noun")) else VehicleType.CAR
+        token = match.group("count")
+        count = int(token) if token.isdigit() else 0 if token in {"零", "〇", "○"} else 1
+        family_counts[family] = family_counts.get(family, 0) + count
+    exhaustive_count = not uncounted_family and (
+        not generic_mixed_heading or set(family_counts) == {VehicleType.CAR, VehicleType.MOTORCYCLE}
     )
+    raw_count = sum(family_counts.values()) if count_matches else None
+    if raw_count == 0 and exhaustive_count:
+        raise ValueError("PCC title explicitly lists zero vehicles")
+    vehicle_count = raw_count if exhaustive_count else None
+    if set(family_counts) == {VehicleType.CAR, VehicleType.MOTORCYCLE} and 0 in family_counts.values() and vehicle_count:
+        zero_family = next(family for family, count in family_counts.items() if count == 0)
+        vehicle_type = VehicleType.CAR if zero_family == VehicleType.MOTORCYCLE else VehicleType.MOTORCYCLE
+        vehicle_type_text = title
+        if zero_family == VehicleType.MOTORCYCLE:
+            vehicle_class, vehicle_class_text = VehicleClass.UNKNOWN, None
+        else:
+            car_category, car_category_text = CarCategory.UNKNOWN, None
     lot_size = vehicle_count or 1
     bulk_lot = vehicle_count is None or vehicle_count > 1 or vehicle_type == VehicleType.MIXED
 
