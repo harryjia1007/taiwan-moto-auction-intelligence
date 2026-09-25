@@ -36,6 +36,7 @@ from ingest.models import (
     VehicleIdentifier,
     VehicleType,
 )
+from ingest.official_documents import validated_official_document_url
 from ingest.parser import (
     TAIPEI,
     _completeness_groups,
@@ -85,6 +86,17 @@ ENFORCEMENT_BRANCHES = (
 )
 
 
+class _PreflightConnectivityFailure(RuntimeError):
+    """A repeated transport failure that may affect every branch on the run."""
+
+    def __init__(self, failure_kind: str, branch: EnforcementBranch, cause: Exception) -> None:
+        self.failure_kind = failure_kind
+        self.branch = branch
+        # The underlying transport message may contain a URL or notice text.
+        # Retain only a fixed, code-owned failure kind in run diagnostics.
+        super().__init__(failure_kind)
+
+
 class MojEnforcementCmsAdapter(SourceAdapter):
     """Bounded discovery on the 13 public Administrative Enforcement CMS sites.
 
@@ -104,6 +116,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     MAX_ROBOTS_BYTES = 256 * 1024
     MAX_SITEMAP_BYTES = 8 * 1024 * 1024
     MAX_ATTACHMENTS = 10
+    PREFLIGHT_CIRCUIT_BREAKER_THRESHOLD = 3
+    PREFLIGHT_STAGES = frozenset({"robots", "sitemap", "homepage"})
     SAFE_ARTIFACT_RESPONSE_HEADERS = frozenset({
         "cache-control",
         "content-disposition",
@@ -126,10 +140,17 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     EXCLUDED_LOT_CONTEXT_PATTERN = re.compile(r"另案|另行|不(?:在|屬|含|包括)|排除|非本次")
     VEHICLE_COUNT_PATTERN = re.compile(r"(?:汽機車|汽車|機車|車輛|重機)\s*[一二三四五六七八九十\d]+\s*[輛台部]")
     EMPTY_LIST_PATTERN = re.compile(
-        r"查無(?:相關|符合條件)?資料|目前(?:尚)?無資料|尚無(?:任何)?資料|沒有(?:符合條件的)?資料"
+        r"查無(?:相關|符合條件)?資料|"
+        r"目前(?:尚)?無資料|"
+        r"尚無(?:任何)?資料|"
+        r"沒有(?:符合條件的)?資料"
     )
     EMPTY_LIST_SELECTORS = (
-        ".no_data", ".nodata", ".no-result", ".noresult", "table.table_list td[colspan]",
+        ".no_data",
+        ".nodata",
+        ".no-result",
+        ".noresult",
+        "table.table_list td[colspan]",
     )
     LIST_LABELS = ("動產拍賣公告", "拍賣品消息", "電子公布欄", "最新消息")
 
@@ -239,6 +260,9 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                                 current_url = urljoin(str(streamed.url), location)
                                 self._validate_url(current_url, expected_host=expected_host)
                                 if robots_preflight:
+                                    # The official CMS redirects /robots.txt to
+                                    # /robots. The policy cannot be checked until
+                                    # that plain-text file has been loaded.
                                     target = urlsplit(current_url)
                                     if target.path not in {"/robots.txt", "/robots"} or target.query or target.fragment:
                                         raise SourceAccessDenied(
@@ -251,7 +275,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                                     )
                                     if branch is None:
                                         raise ValueError(f"No registered branch owns redirect host {expected_host}")
-                                    # The next hop is a separate request target.
+                                    # A same-host redirect is still a new request target.
+                                    # Re-run the loaded policy before contacting it.
                                     self._require_robots_allowed(branch, current_url)
                                 continue
                             enforce_http_status(streamed)
@@ -364,7 +389,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             if parsed.path.startswith("/umbraco/surface/") or "/post" in parsed.path:
                 continue
             if parsed.path.lower().endswith("normalnodelist"):
-                # A CMS navigation page contains links, not dated notice rows.
+                # CMS navigation landing pages point at lists but contain no
+                # dated announcement rows; do not spend a list slot on them.
                 continue
             path = parsed.path.removesuffix("Lpsimplelist")
             canonical = urlunsplit(("https", branch.host, path, "", ""))
@@ -437,8 +463,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     def _page_url(list_url: str, page: int, page_size: int) -> str:
         parsed = urlsplit(list_url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        # Preserve only official link filters. The invented `type=01` drops
-        # real announcements on current branch CMS lists.
+        # The CMS `type=01` filter omits some official rows. Preserve only
+        # filters actually present in the official list link.
         query.update({"Page": str(page), "PageSize": str(page_size)})
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
 
@@ -471,10 +497,12 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 f"{branch.code}: unrecognized announcement list markup; "
                 "neither table_list nor an official empty marker was present"
             )
+
         items: list[DiscoveredItem] = []
         dates: list[datetime] = []
+        rows = soup.select("table.table_list tbody tr")
         recognized_rows = 0
-        for row in soup.select("table.table_list tbody tr"):
+        for row in rows:
             link = row.select_one("td[data-title='標題'] a[href]")
             date_cell = row.select_one("td[data-title*='日期'], td.date")
             if not link or not date_cell:
@@ -515,7 +543,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                     "published_at": published_at.isoformat(),
                     "discovery_method": (
                         "BRANCH_CMS_ANNOUNCEMENT_LIST"
-                        if explicit_vehicle else "BRANCH_CMS_GENERIC_TITLE_PENDING_DETAIL"
+                        if explicit_vehicle
+                        else "BRANCH_CMS_GENERIC_TITLE_PENDING_DETAIL"
                     ),
                     "requires_detail_vehicle_validation": generic_auction,
                 },
@@ -560,8 +589,41 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         self._check_robots(robots.text, branch, [sitemap_url, str(homepage.url)])
         return robots.text, homepage.content
 
+    async def _preflight_with_connectivity_signal(self, branch: EnforcementBranch) -> tuple[str, bytes]:
+        try:
+            return await self._preflight(branch)
+        except httpx.ConnectTimeout as exc:
+            raise _PreflightConnectivityFailure("connect_timeout", branch, exc) from exc
+        except httpx.ConnectError as exc:
+            raise _PreflightConnectivityFailure("connect_error", branch, exc) from exc
+        except httpx.TimeoutException as exc:
+            raise _PreflightConnectivityFailure("request_timeout", branch, exc) from exc
+        except TimeoutError as exc:
+            raise _PreflightConnectivityFailure("async_timeout", branch, exc) from exc
+
+    @staticmethod
+    def _count_preflight_failure(
+        failure_kind: str, previous_kind: str | None, previous_count: int,
+    ) -> tuple[str, int]:
+        return failure_kind, previous_count + 1 if failure_kind == previous_kind else 1
+
+    def _append_preflight_circuit_warnings(
+        self, warnings: list[str], branch_index: int, failure_kind: str, count: int,
+    ) -> bool:
+        if count < self.PREFLIGHT_CIRCUIT_BREAKER_THRESHOLD:
+            return False
+        warnings.append(
+            "Administrative Enforcement CMS preflight circuit breaker opened after "
+            f"{count} consecutive {failure_kind} failures"
+        )
+        warnings.extend(
+            f"{skipped.code}: branch not checked because the preflight circuit breaker was open"
+            for skipped in self.branches[branch_index + 1:]
+        )
+        return True
+
     async def _discover_branch(self, branch: EnforcementBranch, cutoff: datetime) -> list[DiscoveredItem]:
-        robots_text, homepage = await self._preflight(branch)
+        robots_text, homepage = await self._preflight_with_connectivity_signal(branch)
         self._diagnostic_stage = "list_discovery"
         lists = self._announcement_lists(homepage, branch)
         if not lists:
@@ -647,7 +709,9 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         cutoff = now.astimezone(TAIPEI) - timedelta(days=self.LOOKBACK_DAYS)
         found: dict[str, DiscoveredItem] = {}
         branches_checked = 0
-        for branch in self.branches:
+        consecutive_failure_kind: str | None = None
+        consecutive_preflight_failures = 0
+        for branch_index, branch in enumerate(self.branches):
             self._diagnostic_stage = "branch_preflight"
             try:
                 async with asyncio.timeout(self.branch_deadline_seconds):
@@ -655,11 +719,42 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 for item in branch_items:
                     found[item.source_record_id] = item
                 branches_checked += 1
-            except TimeoutError:
-                self.discovery_warnings.append(
-                    f"{branch.code}: branch discovery exceeded {self.branch_deadline_seconds:g} seconds"
+                consecutive_failure_kind = None
+                consecutive_preflight_failures = 0
+            except _PreflightConnectivityFailure as exc:
+                consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                    exc.failure_kind, consecutive_failure_kind, consecutive_preflight_failures,
                 )
+                cause = exc.__cause__ or exc
+                error_kind = re.sub(r"[^A-Za-z0-9_]", "", type(cause).__name__)[:64] or "Exception"
+                self.discovery_warnings.append(
+                    f"{branch.code}: branch discovery failed closed: "
+                    f"stage={self._diagnostic_stage}; error={error_kind}"
+                )
+                if self._append_preflight_circuit_warnings(
+                    self.discovery_warnings, branch_index, exc.failure_kind, consecutive_preflight_failures,
+                ):
+                    break
+            except TimeoutError:
+                stage = self._diagnostic_stage
+                self.discovery_warnings.append(
+                    f"{branch.code}: branch discovery exceeded {self.branch_deadline_seconds:g} seconds; "
+                    f"stage={stage}; error=TimeoutError"
+                )
+                if stage in self.PREFLIGHT_STAGES:
+                    consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                        "async_timeout", consecutive_failure_kind, consecutive_preflight_failures,
+                    )
+                    if self._append_preflight_circuit_warnings(
+                        self.discovery_warnings, branch_index, "async_timeout", consecutive_preflight_failures,
+                    ):
+                        break
+                else:
+                    consecutive_failure_kind = None
+                    consecutive_preflight_failures = 0
             except Exception as exc:
+                consecutive_failure_kind = None
+                consecutive_preflight_failures = 0
                 # httpx transport exceptions may have an empty string form.
                 # Their raw message can also contain a URL or notice text, so
                 # report only a bounded class and a fixed, code-owned stage.
@@ -724,7 +819,12 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             parsed = urlparse(url)
             label = clean(f"{node.get('title', '')} {node.get_text(' ', strip=True)}").lower()
             is_pdf = parsed.path.lower().endswith(".pdf") or ".pdf" in label
-            if parsed.scheme != "https" or parsed.hostname != host or not is_pdf:
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != host
+                or not is_pdf
+                or validated_official_document_url("moj_enforcement_cms", url) is None
+            ):
                 continue
             if url not in attachment_urls:
                 attachment_urls.append(url)
@@ -749,15 +849,20 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         html = next((artifact for artifact in artifacts if artifact.mime_type == "text/html"), None)
         if not html:
             raise ValueError("Administrative Enforcement CMS detail HTML is missing")
+        html_checksum = html.checksum_sha256
         soup = BeautifulSoup(html.content, "html.parser")
         title_node = soup.select_one("meta[name='ContentTitle'], meta[name='DC.Title']")
         title = clean(str(title_node.get("content") or "")) if title_node else ""
         if not title:
             heading = soup.select_one("h2.title")
-            title = clean(heading.get_text(" ", strip=True) if heading else item.title)
+            title = clean(heading.get_text(" ", strip=True) if heading else "")
+        if not title:
+            raise ValueError("Administrative Enforcement CMS detail title marker changed")
         body_node = soup.select_one("section.cp")
-        body = clean(body_node.get_text(" ", strip=True) if body_node else "")
-        combined = _redact_personal_data(f"{title} {body}")
+        official_body = clean(body_node.get_text(" ", strip=True) if body_node else "")
+        body = _redact_personal_data(official_body)
+        official_combined = clean(f"{title} {official_body}")
+        combined = _redact_personal_data(official_combined)
         if not self._is_vehicle_auction_title(title) and not self._is_vehicle_auction_title(combined):
             raise ValueError("Branch CMS post does not explicitly identify a vehicle auction")
 
@@ -774,7 +879,20 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             brand = model = None
             manufacture_year = manufacture_month = displacement = None
             color = None
-        lot_size = max(1, len(plates))
+        count_match = re.search(r"(\d+)\s*[臺台輛部]", combined)
+        chinese_count_match = re.search(r"([一二三四五六七八九十]+)\s*[臺台輛部]", combined)
+        chinese_counts = {
+            "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+        }
+        explicit_count = (
+            int(count_match.group(1))
+            if count_match
+            else chinese_counts.get(chinese_count_match.group(1))
+            if chinese_count_match
+            else None
+        )
+        lot_size = explicit_count or max(1, len(plates))
         bulk_lot = (
             vehicle_type in {VehicleType.UNKNOWN, VehicleType.MIXED}
             or lot_size > 1
@@ -782,12 +900,18 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         )
 
         creator = soup.select_one("meta[name='DC.Creator']")
-        organization = clean(
-            str(creator.get("content") or "") if creator else str(item.metadata.get("organization") or "")
-        ) or "法務部行政執行署（分署未確認）"
+        creator_text = clean(str(creator.get("content") or "")) if creator else ""
+        # List-page metadata is not persisted as a discovery artifact for this
+        # adapter. Do not promote it into a detail fact without exact evidence.
+        organization = creator_text or "法務部行政執行署（分署未確認）"
         case_match = re.search(r"(\d{2,3}年度[^。；;]{0,20}?字第[\d、,，至-]+號)", combined)
         case_number = clean(case_match.group(1)) if case_match else None
-        auction_at = official_datetime(combined)
+        auction_source = (
+            title
+            if official_datetime(title)
+            else _explicit_fact_sentence(official_combined, r"(拍賣|開標).*(?:\d{2,4}[年/-])")
+        )
+        auction_at = official_datetime(auction_source or "")
         status = (
             AuctionStatus.EXPIRED if auction_at and auction_at < self._now()
             else AuctionStatus.SCHEDULED if auction_at
@@ -819,43 +943,139 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             )
             for plate in plates
         ]
-        units = [
-            ParsedVehicleUnit(source_vehicle_key=f"plate:{identifier.normalized_value}", identifiers=[identifier])
-            for identifier in identifiers
-        ] if len(identifiers) > 1 else []
+        # Several plates prove a multi-vehicle lot, but shared prose does not
+        # prove which brand/spec belongs to which plate. Preserve the lot and
+        # identifiers in its snapshot without cloning one spec across vehicles.
+        units: list[ParsedVehicleUnit] = []
+        if len(identifiers) > 1:
+            bulk_lot = True
+            brand = model = color = None
+            manufacture_year = manufacture_month = displacement = None
         pdf_count = sum(artifact.mime_type == "application/pdf" for artifact in artifacts)
-        evidence: list[EvidenceRef] = [
-            EvidenceRef(
-                field_name="official_title",
-                normalized_value=title,
-                source_text=title,
-                extraction_method="HTML",
-                trust="OFFICIAL_EXPLICIT",
-            )
-        ]
-        for attachment_url in item.metadata.get("official_attachment_urls", []):
-            evidence.append(EvidenceRef(
-                field_name="official_attachment_url",
-                normalized_value=str(attachment_url),
-                source_text="官方 PDF 附件",
-                extraction_method="HTML",
-                trust="OFFICIAL_EXPLICIT",
-            ))
-        for field_name, normalized, source in (
-            ("vehicle_type", vehicle_type.value, vehicle_type_text or ("車輛" if "車輛" in combined else None)),
-            ("vehicle_class", vehicle_class.value, vehicle_class_text),
-            ("car_category", car_category.value, car_category_text),
-            ("registration_status", registration.value, _explicit_fact_sentence(combined, r"領牌|過戶|報廢")),
-            ("has_key", has_key.value, _explicit_fact_sentence(combined, r"鑰匙")),
-        ):
-            if source:
+        evidence: list[EvidenceRef] = []
+
+        def fact(pattern: str) -> str | None:
+            return _explicit_fact_sentence(official_combined, pattern)
+
+        def add_evidence(
+            field_name: str,
+            normalized_value: object,
+            source_text: str | None,
+            *,
+            trust: str = "OFFICIAL_EXPLICIT",
+        ) -> None:
+            if source_text:
                 evidence.append(EvidenceRef(
                     field_name=field_name,
-                    normalized_value=normalized,
-                    source_text=source,
+                    normalized_value=normalized_value,
+                    source_text=source_text,
                     extraction_method="HTML",
-                    trust="OFFICIAL_EXPLICIT",
+                    trust=trust,
+                    artifact_checksum_sha256=html_checksum,
                 ))
+
+        add_evidence("official_title", title, title)
+        add_evidence(
+            "organization",
+            organization,
+            creator_text or str(html.official_url),
+            trust="OFFICIAL_EXPLICIT" if creator_text else "SYSTEM_CALCULATED",
+        )
+        add_evidence("official_case_number", case_number, case_match.group(0) if case_match else None)
+        add_evidence("ends_at", auction_at.isoformat() if auction_at else None, auction_source)
+        add_evidence(
+            "status",
+            status.value,
+            auction_source,
+            trust="SYSTEM_CALCULATED",
+        )
+        add_evidence("auction_round", auction_round, round_match.group(0) if round_match else None)
+        add_evidence("reserve_price", reserve_price, reserve_match.group(0) if reserve_match else None)
+        add_evidence("location", location, fact(r"(拍賣地點|放置地點|觀覽地點|地點)"))
+        add_evidence("description", body or None, official_body or None)
+        add_evidence(
+            "disposal_origin",
+            "ADMINISTRATIVE_ENFORCEMENT",
+            creator_text or str(html.official_url),
+            trust="OFFICIAL_INFERRED",
+        )
+
+        identity_source = fact(
+            r"(廠牌|型號|型式|車型|出廠|製造年月|排氣量|汽缸容量|顏色|車色|車牌|牌照|里程)"
+        )
+        for field_name, normalized_value in (
+            ("brand", brand),
+            ("model", model),
+            ("manufacture_year", manufacture_year),
+            ("manufacture_month", manufacture_month),
+            ("displacement_cc", displacement),
+            ("color", color),
+        ):
+            if normalized_value is not None:
+                add_evidence(field_name, normalized_value, identity_source)
+        plate_source = fact(r"(車牌|牌照|車號)")
+        vehicle_source = vehicle_type_text or ("車輛" if "車輛" in official_combined else None)
+        if plates:
+            add_evidence("plate", "、".join(plates), plate_source)
+        count_source = (
+            count_match.group(0)
+            if count_match
+            else chinese_count_match.group(0)
+            if chinese_count_match
+            else plate_source if len(plates) > 1 else vehicle_source
+        )
+        add_evidence(
+            "lot_size",
+            lot_size,
+            count_source,
+            trust=(
+                "OFFICIAL_EXPLICIT"
+                if count_match or chinese_count_match
+                else "SYSTEM_CALCULATED"
+            ),
+        )
+        if bulk_lot:
+            bulk_source = fact(
+                r"(一批|整批|及其他動產|\d+\s*[臺台輛部]|[一二三四五六七八九十]+\s*[臺台輛部])"
+            ) or plate_source or vehicle_source
+            add_evidence(
+                "bulk_lot",
+                True,
+                bulk_source,
+                trust=(
+                    "OFFICIAL_EXPLICIT"
+                    if count_match or chinese_count_match
+                    else "OFFICIAL_INFERRED"
+                ),
+            )
+        add_evidence(
+            "vehicle_type",
+            vehicle_type.value,
+            vehicle_source,
+        )
+        add_evidence("vehicle_class", vehicle_class.value, vehicle_class_text)
+        add_evidence("car_category", car_category.value, car_category_text)
+        add_evidence("eligibility", eligibility.value, fact(r"(回收商|回收業資格|競買資格|應買資格)"))
+        add_evidence("registration_status", registration.value, fact(r"(領牌|過戶|報廢)"))
+        add_evidence("has_key", has_key.value, fact(r"鑰匙"))
+        add_evidence("can_start", can_start.value, fact(r"發動"))
+        add_evidence("can_test", can_test.value, fact(r"測試"))
+        condition_summary = _explicit_fact_sentence(combined, r"車況|刮傷|損壞|漏油|發動|鑰匙")
+        add_evidence("condition_summary", condition_summary, fact(r"車況|刮傷|損壞|漏油|發動|鑰匙"))
+
+        attachment_labels = {
+            urljoin(str(html.official_url), str(node.get("href") or "")): clean(
+                f"{node.get('title', '')} {node.get_text(' ', strip=True)}"
+            )
+            for node in soup.select(".file_download a[href]")
+        }
+        for attachment_url in item.metadata.get("official_attachment_urls", []):
+            candidate = str(attachment_url)
+            add_evidence(
+                "official_attachment_url",
+                candidate,
+                attachment_labels.get(candidate) or "官方 PDF 附件",
+            )
         completeness, groups = _completeness_groups({
             "identity": [plates, brand, model, vehicle_type],
             "auction": [organization, auction_at, reserve_price, status, eligibility],
@@ -894,7 +1114,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             can_start=can_start,
             can_test=can_test,
             registration_status=registration,
-            condition_summary=_explicit_fact_sentence(combined, r"車況|刮傷|損壞|漏油|發動|鑰匙"),
+            condition_summary=condition_summary,
             identifiers=identifiers,
             vehicle_units=units,
             photo_urls=[],
@@ -907,14 +1127,39 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         started = time.monotonic()
         warnings: list[str] = []
         healthy = 0
-        for branch in self.branches:
+        consecutive_failure_kind: str | None = None
+        consecutive_preflight_failures = 0
+        for branch_index, branch in enumerate(self.branches):
             try:
                 async with asyncio.timeout(self.branch_deadline_seconds):
-                    await self._preflight(branch)
+                    await self._preflight_with_connectivity_signal(branch)
                 healthy += 1
+                consecutive_failure_kind = None
+                consecutive_preflight_failures = 0
+            except _PreflightConnectivityFailure as exc:
+                consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                    exc.failure_kind, consecutive_failure_kind, consecutive_preflight_failures,
+                )
+                warnings.append(f"{branch.code}: {exc}")
+                if self._append_preflight_circuit_warnings(
+                    warnings, branch_index, exc.failure_kind, consecutive_preflight_failures,
+                ):
+                    break
             except TimeoutError:
-                warnings.append(f"{branch.code}: preflight exceeded {self.branch_deadline_seconds:g} seconds")
+                warnings.append(
+                    f"{branch.code}: preflight exceeded {self.branch_deadline_seconds:g} seconds; "
+                    f"stage={self._diagnostic_stage}; error=TimeoutError"
+                )
+                consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                    "async_timeout", consecutive_failure_kind, consecutive_preflight_failures,
+                )
+                if self._append_preflight_circuit_warnings(
+                    warnings, branch_index, "async_timeout", consecutive_preflight_failures,
+                ):
+                    break
             except Exception as exc:
+                consecutive_failure_kind = None
+                consecutive_preflight_failures = 0
                 warnings.append(f"{branch.code}: {exc}")
         status = "ACTIVE" if healthy == len(self.branches) else "PARTIAL" if healthy else "DEGRADED"
         return SourceHealth(

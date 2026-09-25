@@ -11,7 +11,7 @@ import {
 
 export type PageSearchParams = Record<string, string | string[] | undefined>;
 
-const SOURCES = new Set(["judicial", "moj_auction", "moj_enforcement", "pcc", "shwoo"]);
+const SOURCES = new Set(["judicial", "judicial_notices", "moj_auction", "moj_enforcement", "moj_enforcement_cms", "customs", "pcc", "shwoo"]);
 const VIEWS = new Set(["active", "ended", "favorites", "scrap", "all"]);
 const SORTS = new Set(["auction_asc", "auction_desc", "price_asc", "price_desc", "completeness_desc"]);
 const COUNTIES = new Set(["臺北市","新北市","桃園市","臺中市","臺南市","高雄市","基隆市","新竹市","嘉義市","新竹縣","苗栗縣","彰化縣","南投縣","雲林縣","嘉義縣","屏東縣","宜蘭縣","花蓮縣","臺東縣","澎湖縣","金門縣","連江縣"]);
@@ -26,10 +26,10 @@ function selected(value: string | null, allowed: Set<string>) {
   return value && allowed.has(value) ? value : undefined;
 }
 
-function numberParam(value: string | null, maximum = Number.MAX_SAFE_INTEGER) {
-  if (!value) return undefined;
+function integerParam(value: string | null, maximum = Number.MAX_SAFE_INTEGER) {
+  if (!value || !/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= maximum ? parsed : undefined;
+  return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= maximum ? parsed : undefined;
 }
 
 export function pageParamsToSearchParams(params: PageSearchParams): URLSearchParams {
@@ -50,9 +50,9 @@ export function parseMarketplaceQuery(query: URLSearchParams): {
   const ccValues = query.getAll("cc").flatMap((value) => value.split(","));
   const displacementBands = [...new Set(ccValues.map(displacementBandFromQuery).filter((value): value is NonNullable<typeof value> => Boolean(value)))];
   const price = query.get("price")?.split("-");
-  const within = marketView === "ended" ? undefined : numberParam(query.get("within"), 365);
-  const minPrice = numberParam(query.get("minPrice")) ?? (price?.[0] ? numberParam(price[0]) : undefined);
-  const maxPrice = numberParam(query.get("maxPrice")) ?? (price?.[1] ? numberParam(price[1]) : undefined);
+  const within = marketView === "ended" ? undefined : integerParam(query.get("within"), 365);
+  const minPrice = integerParam(query.get("minPrice")) ?? (price?.[0] ? integerParam(price[0]) : undefined);
+  const maxPrice = integerParam(query.get("maxPrice")) ?? (price?.[1] ? integerParam(price[1]) : undefined);
   const filters: MotorcycleFilters = {
     keyword: query.get("keyword")?.trim().slice(0, 120) || undefined,
     source: selected(query.get("source"), SOURCES),
@@ -67,31 +67,35 @@ export function parseMarketplaceQuery(query: URLSearchParams): {
     displacementBands: displacementBands.length ? displacementBands : undefined,
     hasPhotos: query.get("hasPhotos") === "true",
     singleVehicle: query.get("singleVehicle") === "true",
-    excludeScrap: query.get("excludeScrap") === "true",
+    excludeScrap: marketView !== "scrap" && query.get("excludeScrap") === "true",
     auctionWithinDays: within,
     minPrice,
     maxPrice,
     marketView,
     sort,
   };
-  if (filters.carCategory) {
+  if (filters.vehicleType === "CAR") {
+    filters.vehicleClass = undefined;
+    filters.displacementBands = undefined;
+  } else if (filters.vehicleType === "MOTORCYCLE") {
+    filters.carCategory = undefined;
+  } else if (filters.vehicleType === "MIXED" || filters.vehicleType === "UNKNOWN") {
+    filters.vehicleClass = undefined;
+    filters.carCategory = undefined;
+    filters.displacementBands = undefined;
+  } else if (filters.carCategory) {
     filters.vehicleType = "CAR";
     filters.vehicleClass = undefined;
     filters.displacementBands = undefined;
   } else if (filters.vehicleClass || filters.displacementBands?.length) {
     filters.vehicleType = "MOTORCYCLE";
-  } else if (filters.vehicleType === "CAR") {
-    filters.vehicleClass = undefined;
-    filters.displacementBands = undefined;
-  } else if (filters.vehicleType !== "MOTORCYCLE") {
-    filters.vehicleClass = undefined;
     filters.carCategory = undefined;
-    filters.displacementBands = undefined;
   }
+  const rawLimit = integerParam(query.get("limit"));
   return {
     filters,
-    limit: Math.min(Math.max(Number(query.get("limit")) || 24, 1), 100),
-    cursor: query.get("cursor"),
+    limit: rawLimit === undefined ? 24 : Math.min(Math.max(rawLimit, 1), 100),
+    cursor: (query.get("cursor")?.length ?? 0) <= 512 ? query.get("cursor") : null,
   };
 }
 
@@ -118,4 +122,50 @@ export function sanitizedMarketplaceQuery(query: URLSearchParams): URLSearchPara
   if (parsed.auctionWithinDays) clean.set("within", String(parsed.auctionWithinDays));
   if (parsed.sort && parsed.sort !== "auction_asc") clean.set("sort", parsed.sort);
   return clean;
+}
+
+type MarketplaceView = NonNullable<MotorcycleFilters["marketView"]>;
+type MarketplacePreset = "public-bidding" | "normal-transfer" | "photo-single" | "seven-days";
+
+/** Keep the shopper's context while dropping filters that contradict the new area. */
+export function marketplaceViewHref(query: URLSearchParams, view: MarketplaceView, within?: number): string {
+  const next = sanitizedMarketplaceQuery(query);
+  next.set("view", view);
+  if (view === "ended" || within === undefined) next.delete("within");
+  if (within !== undefined && view !== "ended") next.set("within", String(within));
+
+  const previousView = parseMarketplaceQuery(query).filters.marketView;
+  if ((view === "scrap" && previousView !== "scrap") || (previousView === "scrap" && view !== "scrap" && view !== "favorites")) {
+    next.delete("eligibility");
+    next.delete("registration");
+    next.delete("excludeScrap");
+    if (previousView === "scrap" && next.get("origin") === "SCRAP_DISPOSAL" && view !== "scrap") next.delete("origin");
+  }
+  return `/motorcycles?${next.toString()}`;
+}
+
+/** Presets refine the current search; they never silently discard source or region. */
+export function marketplacePresetHref(query: URLSearchParams, preset: MarketplacePreset): string {
+  const next = sanitizedMarketplaceQuery(query);
+  if (preset === "public-bidding" || preset === "normal-transfer") {
+    if (next.get("view") === "scrap") {
+      next.set("view", "active");
+      next.delete("origin");
+      next.delete("eligibility");
+      next.delete("registration");
+      next.delete("excludeScrap");
+    }
+  }
+  if (preset === "public-bidding") {
+    next.set("eligibility", "NATURAL_PERSON_ALLOWED");
+    next.set("excludeScrap", "true");
+  } else if (preset === "normal-transfer") {
+    next.set("registration", "NORMAL_TRANSFER");
+  } else if (preset === "photo-single") {
+    next.set("hasPhotos", "true");
+    next.set("singleVehicle", "true");
+  } else if (next.get("view") !== "ended") {
+    next.set("within", "7");
+  }
+  return `/motorcycles?${next.toString()}`;
 }

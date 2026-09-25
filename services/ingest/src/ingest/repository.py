@@ -4,14 +4,26 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
-
 import psycopg
 from psycopg.rows import dict_row
 
 from ingest import PARSER_VERSION
-from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SyncResult
+from ingest.models import (
+    CarCategory,
+    DiscoveredItem,
+    EvidenceRef,
+    FourState,
+    ParsedAuctionRecord,
+    ParsedVehicleUnit,
+    RawArtifact,
+    RegistrationStatus,
+    SyncResult,
+    VehicleClass,
+    VehicleType,
+)
+from ingest.official_documents import official_document_urls
 from ingest.storage import ArtifactStorage
-from ingest.source_policy import AccessDecision
+from ingest.source_policy import AccessDecision, SourceAccessBlocked
 
 SOURCE_IDS = {
     "shwoo": "20000000-0000-0000-0000-000000000001",
@@ -21,8 +33,8 @@ SOURCE_IDS = {
     "moj_enforcement": "20000000-0000-0000-0000-000000000003",
     "customs": "20000000-0000-0000-0000-000000000007",
     "moj_enforcement_cms": "20000000-0000-0000-0000-000000000008",
+    "judicial_notices": "20000000-0000-0000-0000-000000000009",
 }
-
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -43,6 +55,117 @@ def source_status_after_run(access: AccessDecision, run_status: str) -> str:
     return "DEGRADED"
 
 
+def evidence_artifact_id(
+    evidence: EvidenceRef,
+    *,
+    primary_artifact_id: str,
+    artifacts_by_checksum: dict[str, str],
+) -> str:
+    """Resolve an evidence row to the exact immutable artifact it quotes."""
+    checksum = evidence.artifact_checksum_sha256
+    if checksum is None:
+        return primary_artifact_id
+    artifact_id = artifacts_by_checksum.get(checksum)
+    if artifact_id is None:
+        raise ValueError(
+            f"Evidence for {evidence.field_name!r} references an artifact checksum "
+            "that was not saved with this record"
+        )
+    return artifact_id
+
+
+def validate_artifact_evidence(
+    artifacts: list[RawArtifact],
+    evidence_rows: list[EvidenceRef],
+) -> None:
+    """Reject forged checksums and evidence references before writing bytes."""
+    if not artifacts:
+        raise ValueError("At least one raw artifact is required")
+    available: set[str] = set()
+    for artifact in artifacts:
+        actual_checksum = hashlib.sha256(artifact.content).hexdigest()
+        if artifact.checksum_sha256 != actual_checksum:
+            raise ValueError("Raw artifact checksum does not match its immutable content")
+        available.add(actual_checksum)
+    for evidence in evidence_rows:
+        checksum = evidence.artifact_checksum_sha256
+        if checksum is None and len(artifacts) > 1:
+            raise ValueError(
+                f"Evidence for {evidence.field_name!r} must name its artifact checksum "
+                "when more than one raw artifact was fetched"
+            )
+        if checksum is not None and checksum not in available:
+            raise ValueError(
+                f"Evidence for {evidence.field_name!r} references an artifact checksum "
+                "that was not saved with this record"
+            )
+
+
+_COMPLETENESS_WEIGHTS = {
+    "identity": .20,
+    "auction": .25,
+    "condition": .15,
+    "registration": .20,
+    "fees": .10,
+    "media": .10,
+}
+
+
+def vehicle_facts_for_unit(record: ParsedAuctionRecord, unit: ParsedVehicleUnit) -> ParsedAuctionRecord:
+    """Keep lot-level prose from becoming unverified facts about each vehicle.
+
+    ParsedVehicleUnit currently carries identifiers only. When a lot has
+    multiple units, its record-level brand, specifications and condition have
+    no proven unit association. The original record, snapshot and lot retain
+    those facts and their exact evidence; current vehicle rows remain honest.
+    """
+    if len(record.vehicle_units) <= 1:
+        return record
+    groups = dict(record.completeness_groups)
+    groups.update({
+        "identity": 25 if unit.identifiers else 0,
+        "condition": 0,
+        "registration": 0,
+        "media": 0,
+    })
+    completeness = round(sum(groups.get(name, 0) * weight for name, weight in _COMPLETENESS_WEIGHTS.items()))
+    return record.model_copy(update={
+        "brand": None,
+        "model": None,
+        "manufacture_year": None,
+        "manufacture_month": None,
+        "displacement_cc": None,
+        "color": None,
+        "mileage_km": None,
+        "vehicle_type": VehicleType.UNKNOWN if record.vehicle_type == VehicleType.MIXED else record.vehicle_type,
+        "vehicle_class": VehicleClass.UNKNOWN,
+        "car_category": CarCategory.UNKNOWN,
+        "has_key": FourState.UNKNOWN,
+        "can_start": FourState.UNKNOWN,
+        "can_test": FourState.UNKNOWN,
+        "registration_status": RegistrationStatus.UNKNOWN,
+        "condition_summary": None,
+        "visible_damage": None,
+        "tax_arrears": FourState.UNKNOWN,
+        "fine_arrears": FourState.UNKNOWN,
+        "fuel_fee_arrears": FourState.UNKNOWN,
+        "completeness": completeness,
+        "completeness_groups": groups,
+    })
+
+
+def retain_as_bulk_lot(record: ParsedAuctionRecord) -> bool:
+    """Keep a whole lot visible until every officially counted unit is identified."""
+    return record.bulk_lot and len(record.vehicle_units) < record.lot_size
+
+
+def validate_vehicle_unit_cardinality(record: ParsedAuctionRecord) -> None:
+    """Reject contradictory current-vehicle counts before any artifact write."""
+    unit_count = len(record.vehicle_units)
+    if unit_count > record.lot_size or (record.lot_size > 1 and not record.bulk_lot):
+        raise ValueError("Parsed vehicle-unit count conflicts with the official lot count")
+
+
 class DatabaseRepository:
     def __init__(self, database_url: str, storage: ArtifactStorage, source: str) -> None:
         if source not in SOURCE_IDS:
@@ -54,6 +177,37 @@ class DatabaseRepository:
 
     def _connect(self) -> psycopg.Connection[dict[str, Any]]:
         return psycopg.connect(self.database_url, row_factory=dict_row)
+
+    def require_access(
+        self,
+        allowed_decisions: set[AccessDecision] | frozenset[AccessDecision],
+    ) -> AccessDecision:
+        """Require the persisted policy before creating a run or discovering data."""
+        if not allowed_decisions:
+            raise ValueError("At least one source-access decision must be allowed")
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "select decision from source_access_policies where source_id=%s",
+                (self.source_id,),
+            )
+            policy_row = cur.fetchone()
+        if policy_row is None:
+            raise SourceAccessBlocked(
+                f"Database source-access policy is missing for {self.source}; discovery was blocked"
+            )
+        try:
+            decision = AccessDecision(policy_row["decision"])
+        except (KeyError, ValueError, TypeError) as exc:
+            raise SourceAccessBlocked(
+                f"Database source-access policy is invalid for {self.source}; discovery was blocked"
+            ) from exc
+        if decision not in allowed_decisions:
+            expected = ", ".join(sorted(value.value for value in allowed_decisions))
+            raise SourceAccessBlocked(
+                f"Database source-access policy for {self.source} is {decision.value}; "
+                f"this operation requires {expected}"
+            )
+        return decision
 
     def start_run(self) -> str:
         with self._connect() as conn, conn.cursor() as cur:
@@ -117,6 +271,23 @@ class DatabaseRepository:
         return loaded
 
     async def save(self, run_id: str, item: DiscoveredItem, artifacts: list[RawArtifact], record: ParsedAuctionRecord) -> bool:
+        validate_vehicle_unit_cardinality(record)
+        validate_artifact_evidence(artifacts, record.evidence)
+        checksums = [artifact.checksum_sha256 for artifact in artifacts]
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """select distinct ra.checksum_sha256
+                   from raw_artifacts ra
+                   join artifact_tombstones tombstone on tombstone.artifact_id=ra.id
+                   where ra.checksum_sha256 = any(%s)""",
+                (checksums,),
+            )
+            tombstoned = [str(row["checksum_sha256"]) for row in cur.fetchall()]
+        if tombstoned:
+            raise ValueError(
+                "A previously purged artifact checksum was fetched again; "
+                "storage restoration requires an explicit audited artifact generation"
+            )
         paths = [await self.storage.put(artifact) for artifact in artifacts]
         payload = record.model_dump(mode="json")
         payload_json = _json(payload)
@@ -164,19 +335,72 @@ class DatabaseRepository:
                 else:
                     cur.execute("select id from raw_artifacts where checksum_sha256=%s and storage_path=%s", (artifact.checksum_sha256, path))
                     artifact_ids.append(str(cur.fetchone()["id"]))
+            for order, artifact_id in enumerate(artifact_ids):
+                cur.execute(
+                    """insert into source_record_artifacts
+                       (source_record_id,artifact_id,first_sync_run_id,last_sync_run_id,
+                        artifact_role,sort_order,first_seen_at,last_seen_at)
+                       values (%s,%s,%s,%s,%s,%s,now(),now())
+                       on conflict (source_record_id,artifact_id) do update
+                       set last_sync_run_id=excluded.last_sync_run_id,
+                           artifact_role=case
+                             when source_record_artifacts.artifact_role='PRIMARY' then 'PRIMARY'
+                             else excluded.artifact_role
+                           end,
+                           sort_order=least(source_record_artifacts.sort_order,excluded.sort_order),
+                           last_seen_at=now()""",
+                    (
+                        source_record_uuid,
+                        artifact_id,
+                        run_id,
+                        run_id,
+                        "PRIMARY" if order == 0 else "SUPPORTING",
+                        order,
+                    ),
+                )
             artifacts_by_url = {
                 str(artifact.official_url): (artifact, artifact_id, path)
                 for artifact, artifact_id, path in zip(artifacts, artifact_ids, paths, strict=True)
             }
+            artifacts_by_checksum = {
+                artifact.checksum_sha256: artifact_id
+                for artifact, artifact_id in zip(artifacts, artifact_ids, strict=True)
+            }
             primary_artifact_id = artifact_ids[0]
-            for artifact, artifact_id in zip(artifacts, artifact_ids, strict=True):
-                if artifact.mime_type == "application/pdf":
+            cached_documents = {
+                str(artifact.official_url): artifact_id
+                for artifact, artifact_id in zip(artifacts, artifact_ids, strict=True)
+                if artifact.mime_type == "application/pdf"
+            }
+            document_urls = official_document_urls(
+                record,
+                self.source,
+                artifact_urls=cached_documents,
+            )
+            for official_url in document_urls:
+                cached_artifact_id = cached_documents.get(official_url)
+                if cached_artifact_id is not None:
                     cur.execute(
-                        """insert into documents (source_record_id,artifact_id,title,document_type,official_url)
+                        """insert into documents
+                           (source_record_id,artifact_id,title,document_type,official_url)
                            values (%s,%s,%s,'OFFICIAL_AUCTION_NOTICE',%s)
-                           on conflict (source_record_id,artifact_id) do update
-                           set title=excluded.title,official_url=excluded.official_url""",
-                        (source_record_uuid, artifact_id, f"{record.title}－官方拍賣公告", str(artifact.official_url)),
+                           on conflict (source_record_id,official_url) do update
+                           set artifact_id=excluded.artifact_id,title=excluded.title,
+                               document_type=excluded.document_type""",
+                        (
+                            source_record_uuid,
+                            cached_artifact_id,
+                            f"{record.title}－官方拍賣公告",
+                            official_url,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """insert into documents
+                           (source_record_id,artifact_id,title,document_type,official_url)
+                           values (%s,null,%s,'OFFICIAL_LINK_ONLY',%s)
+                           on conflict (source_record_id,official_url) do nothing""",
+                        (source_record_uuid, f"{record.title}－官方完整全文", official_url),
                     )
             cur.execute(
                 """insert into snapshots (source_record_id,artifact_id,normalized_payload,payload_checksum,parser_version)
@@ -245,9 +469,18 @@ class DatabaseRepository:
             )
             lot_id = cur.fetchone()["id"]
 
-            # An inseparable bulk description is a real lot, not evidence of N
-            # individually identified vehicles. Preserve it at lot level only.
-            if record.bulk_lot and not record.vehicle_units:
+            # An inseparable or only partly identified bulk description is a
+            # real lot, not evidence of N individually identified vehicles.
+            # A single known plate must not make the remaining vehicles vanish
+            # from the current marketplace projection.
+            if retain_as_bulk_lot(record):
+                cur.execute(
+                    """update vehicles
+                       set projection_active=false,projection_retired_at=now(),
+                           projection_retired_reason=%s,updated_at=now()
+                       where lot_id=%s and projection_active""",
+                    (f"Parser {PARSER_VERSION} retained an incompletely identified official bulk lot", lot_id),
+                )
                 for order, url in enumerate(record.photo_urls):
                     matched = artifacts_by_url.get(str(url))
                     artifact, artifact_id, storage_path = matched if matched else (None, None, None)
@@ -263,26 +496,43 @@ class DatabaseRepository:
                          artifact.checksum_sha256 if artifact else None, order),
                     )
                 for evidence in record.evidence:
+                    artifact_id = evidence_artifact_id(
+                        evidence,
+                        primary_artifact_id=primary_artifact_id,
+                        artifacts_by_checksum=artifacts_by_checksum,
+                    )
                     cur.execute(
                         """insert into field_evidence
                            (entity_type,entity_id,field_name,normalized_value,source_record_id,artifact_id,source_text,table_row,
                             parser_name,parser_version,extraction_method,trust,confidence)
                            values ('lot',%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                            on conflict do nothing""",
-                        (lot_id, evidence.field_name, _json(evidence.normalized_value), source_record_uuid, primary_artifact_id,
+                        (lot_id, evidence.field_name, _json(evidence.normalized_value), source_record_uuid, artifact_id,
                          evidence.source_text, evidence.table_row, self.source, PARSER_VERSION, evidence.extraction_method,
                          evidence.trust, evidence.confidence),
                     )
                 return changed or bool(source_row["inserted"])
 
+            # A newer snapshot is authoritative only for the current projection,
+            # never for history. Retire earlier rows first, then reactivate only
+            # vehicle identities explicitly present in this parse.
+            cur.execute(
+                """update vehicles
+                   set projection_active=false,projection_retired_at=now(),
+                       projection_retired_reason=%s,updated_at=now()
+                   where lot_id=%s and projection_active""",
+                (f"Superseded by parser {PARSER_VERSION}", lot_id),
+            )
+            primary_unit = record.vehicle_units[0] if record.vehicle_units else None
+            primary_facts = vehicle_facts_for_unit(record, primary_unit) if primary_unit else record
             brand_id = None
-            if record.brand:
-                cur.execute("select id from vehicle_brands where %s = any(aliases) or canonical_name=%s limit 1", (record.brand, record.brand))
+            if primary_facts.brand:
+                cur.execute("select id from vehicle_brands where %s = any(aliases) or canonical_name=%s limit 1", (primary_facts.brand, primary_facts.brand))
                 row = cur.fetchone()
                 brand_id = row["id"] if row else None
             model_id = None
-            if brand_id and record.model:
-                cur.execute("select id from vehicle_models where brand_id=%s and (canonical_name=%s or model_code=%s) limit 1", (brand_id, record.model, record.model))
+            if brand_id and primary_facts.model:
+                cur.execute("select id from vehicle_models where brand_id=%s and (canonical_name=%s or model_code=%s) limit 1", (brand_id, primary_facts.model, primary_facts.model))
                 row = cur.fetchone()
                 model_id = row["id"] if row else None
             cur.execute(
@@ -290,8 +540,9 @@ class DatabaseRepository:
                 insert into vehicles
                 (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_type,vehicle_category,car_category,manufacture_year,manufacture_month,
                  displacement_cc,color,mileage_km,has_key,can_start,can_test,registration_status,condition_summary,visible_damage,
-                 tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                 tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups,
+                 projection_active,projection_retired_at,projection_retired_reason)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,true,null,null)
                 on conflict (lot_id,source_vehicle_key) do update set
                  brand_id=excluded.brand_id,model_id=excluded.model_id,original_brand=excluded.original_brand,original_model=excluded.original_model,
                  vehicle_type=excluded.vehicle_type,vehicle_category=excluded.vehicle_category,car_category=excluded.car_category,
@@ -299,50 +550,87 @@ class DatabaseRepository:
                  color=excluded.color,mileage_km=excluded.mileage_km,has_key=excluded.has_key,can_start=excluded.can_start,can_test=excluded.can_test,
                  registration_status=excluded.registration_status,condition_summary=excluded.condition_summary,visible_damage=excluded.visible_damage,
                  tax_arrears=excluded.tax_arrears,fine_arrears=excluded.fine_arrears,fuel_fee_arrears=excluded.fuel_fee_arrears,
-                 completeness=excluded.completeness,completeness_groups=excluded.completeness_groups
+                 completeness=excluded.completeness,completeness_groups=excluded.completeness_groups,
+                 projection_active=true,projection_retired_at=null,projection_retired_reason=null
                 returning id
                 """,
-                (lot_id, record.vehicle_units[0].source_vehicle_key if record.vehicle_units else "primary",
-                 brand_id, model_id, record.brand, record.model, record.model, record.vehicle_type.value,
-                 record.vehicle_class.value, record.car_category.value, record.manufacture_year, record.manufacture_month,
-                 record.displacement_cc, record.color, record.mileage_km, record.has_key.value, record.can_start.value, record.can_test.value,
-                 record.registration_status.value, record.condition_summary, record.visible_damage, record.tax_arrears.value,
-                 record.fine_arrears.value, record.fuel_fee_arrears.value, record.completeness, _json(record.completeness_groups)),
+                (lot_id, primary_unit.source_vehicle_key if primary_unit else "primary",
+                 brand_id, model_id, primary_facts.brand, primary_facts.model, primary_facts.model, primary_facts.vehicle_type.value,
+                 primary_facts.vehicle_class.value, primary_facts.car_category.value, primary_facts.manufacture_year, primary_facts.manufacture_month,
+                 primary_facts.displacement_cc, primary_facts.color, primary_facts.mileage_km, primary_facts.has_key.value,
+                 primary_facts.can_start.value, primary_facts.can_test.value,
+                 primary_facts.registration_status.value, primary_facts.condition_summary, primary_facts.visible_damage,
+                 primary_facts.tax_arrears.value, primary_facts.fine_arrears.value, primary_facts.fuel_fee_arrears.value,
+                 primary_facts.completeness, _json(primary_facts.completeness_groups)),
             )
             vehicle_id = cur.fetchone()["id"]
             primary_identifiers = record.vehicle_units[0].identifiers if record.vehicle_units else record.identifiers
+            cur.execute(
+                "update vehicle_identifiers set projection_active=false where vehicle_id=%s and projection_active",
+                (vehicle_id,),
+            )
             for identifier in primary_identifiers:
                 cur.execute(
-                    """insert into vehicle_identifiers (vehicle_id,identifier_type,normalized_value,original_value)
-                       values (%s,%s,%s,%s) on conflict (vehicle_id,identifier_type,normalized_value)
-                       do update set original_value=excluded.original_value""",
+                    """insert into vehicle_identifiers
+                       (vehicle_id,identifier_type,normalized_value,original_value,projection_active)
+                       values (%s,%s,%s,%s,true) on conflict (vehicle_id,identifier_type,normalized_value)
+                       do update set original_value=excluded.original_value,projection_active=true""",
                     (vehicle_id, identifier.identifier_type, identifier.normalized_value, identifier.original_value),
                 )
             for unit in record.vehicle_units[1:]:
+                unit_facts = vehicle_facts_for_unit(record, unit)
                 cur.execute(
                     """
                     insert into vehicles
                     (lot_id,source_vehicle_key,brand_id,model_id,original_brand,original_model,model_code,vehicle_type,vehicle_category,car_category,manufacture_year,manufacture_month,
                      displacement_cc,color,mileage_km,has_key,can_start,can_test,registration_status,condition_summary,visible_damage,
-                     tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups)
-                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
-                    on conflict (lot_id,source_vehicle_key) do update set updated_at=now() returning id
+                     tax_arrears,fine_arrears,fuel_fee_arrears,completeness,completeness_groups,
+                     projection_active,projection_retired_at,projection_retired_reason)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,true,null,null)
+                    on conflict (lot_id,source_vehicle_key) do update set
+                      brand_id=excluded.brand_id,model_id=excluded.model_id,
+                      original_brand=excluded.original_brand,original_model=excluded.original_model,
+                      model_code=excluded.model_code,vehicle_type=excluded.vehicle_type,
+                      vehicle_category=excluded.vehicle_category,car_category=excluded.car_category,
+                      manufacture_year=excluded.manufacture_year,manufacture_month=excluded.manufacture_month,
+                      displacement_cc=excluded.displacement_cc,color=excluded.color,mileage_km=excluded.mileage_km,
+                      has_key=excluded.has_key,can_start=excluded.can_start,can_test=excluded.can_test,
+                      registration_status=excluded.registration_status,condition_summary=excluded.condition_summary,
+                      visible_damage=excluded.visible_damage,tax_arrears=excluded.tax_arrears,
+                      fine_arrears=excluded.fine_arrears,fuel_fee_arrears=excluded.fuel_fee_arrears,
+                      completeness=excluded.completeness,completeness_groups=excluded.completeness_groups,
+                      projection_active=true,projection_retired_at=null,
+                      projection_retired_reason=null,updated_at=now()
+                    returning id
                     """,
-                    (lot_id, unit.source_vehicle_key, brand_id, model_id, record.brand, record.model, record.model,
-                     record.vehicle_type.value, record.vehicle_class.value, record.car_category.value,
-                     record.manufacture_year, record.manufacture_month, record.displacement_cc, record.color, record.mileage_km,
-                     record.has_key.value, record.can_start.value, record.can_test.value, record.registration_status.value,
-                     record.condition_summary, record.visible_damage, record.tax_arrears.value, record.fine_arrears.value,
-                     record.fuel_fee_arrears.value, record.completeness, _json(record.completeness_groups)),
+                    (lot_id, unit.source_vehicle_key, brand_id, model_id, unit_facts.brand, unit_facts.model, unit_facts.model,
+                     unit_facts.vehicle_type.value, unit_facts.vehicle_class.value, unit_facts.car_category.value,
+                     unit_facts.manufacture_year, unit_facts.manufacture_month, unit_facts.displacement_cc,
+                     unit_facts.color, unit_facts.mileage_km,
+                     unit_facts.has_key.value, unit_facts.can_start.value, unit_facts.can_test.value,
+                     unit_facts.registration_status.value, unit_facts.condition_summary, unit_facts.visible_damage,
+                     unit_facts.tax_arrears.value, unit_facts.fine_arrears.value, unit_facts.fuel_fee_arrears.value,
+                     unit_facts.completeness, _json(unit_facts.completeness_groups)),
                 )
                 unit_vehicle_id = cur.fetchone()["id"]
+                cur.execute(
+                    "update vehicle_identifiers set projection_active=false where vehicle_id=%s and projection_active",
+                    (unit_vehicle_id,),
+                )
                 for identifier in unit.identifiers:
                     cur.execute(
-                        """insert into vehicle_identifiers (vehicle_id,identifier_type,normalized_value,original_value)
-                           values (%s,%s,%s,%s) on conflict (vehicle_id,identifier_type,normalized_value)
-                           do update set original_value=excluded.original_value""",
+                        """insert into vehicle_identifiers
+                           (vehicle_id,identifier_type,normalized_value,original_value,projection_active)
+                           values (%s,%s,%s,%s,true) on conflict (vehicle_id,identifier_type,normalized_value)
+                           do update set original_value=excluded.original_value,projection_active=true""",
                         (unit_vehicle_id, identifier.identifier_type, identifier.normalized_value, identifier.original_value),
                     )
+                cur.execute(
+                    """insert into vehicle_observations (vehicle_id,snapshot_id,observed_at,payload)
+                       values (%s,%s,now(),%s::jsonb)
+                       on conflict (vehicle_id,snapshot_id) do nothing""",
+                    (unit_vehicle_id, snapshot_id, payload_json),
+                )
             cur.execute(
                 """insert into vehicle_observations (vehicle_id,snapshot_id,observed_at,payload)
                    values (%s,%s,now(),%s::jsonb) on conflict (vehicle_id,snapshot_id) do nothing""",
@@ -351,25 +639,36 @@ class DatabaseRepository:
             for order, url in enumerate(record.photo_urls):
                 matched = artifacts_by_url.get(str(url))
                 artifact, artifact_id, storage_path = matched if matched else (None, None, None)
+                # A source image with no per-unit association documents the
+                # whole lot, not the first plate in a multi-vehicle notice.
+                photo_vehicle_id = vehicle_id if len(record.vehicle_units) <= 1 else None
+                photo_lot_id = lot_id if len(record.vehicle_units) > 1 else None
                 cur.execute(
-                    """insert into photos (vehicle_id,source_record_id,artifact_id,source_url,storage_path,checksum_sha256,sort_order)
-                       values (%s,%s,%s,%s,%s,%s,%s) on conflict (source_record_id,source_url)
-                       do update set vehicle_id=excluded.vehicle_id,lot_id=null,
+                    """insert into photos (vehicle_id,lot_id,source_record_id,artifact_id,source_url,storage_path,checksum_sha256,sort_order)
+                       values (%s,%s,%s,%s,%s,%s,%s,%s) on conflict (source_record_id,source_url)
+                       do update set vehicle_id=excluded.vehicle_id,lot_id=excluded.lot_id,
                          artifact_id=coalesce(excluded.artifact_id,photos.artifact_id),
                          storage_path=coalesce(excluded.storage_path,photos.storage_path),
                          checksum_sha256=coalesce(excluded.checksum_sha256,photos.checksum_sha256),
                          sort_order=excluded.sort_order,last_seen_at=now(),availability_status='AVAILABLE'""",
-                    (vehicle_id, source_record_uuid, artifact_id, str(url), storage_path,
+                    (photo_vehicle_id, photo_lot_id, source_record_uuid, artifact_id, str(url), storage_path,
                      artifact.checksum_sha256 if artifact else None, order),
                 )
             for evidence in record.evidence:
+                artifact_id = evidence_artifact_id(
+                    evidence,
+                    primary_artifact_id=primary_artifact_id,
+                    artifacts_by_checksum=artifacts_by_checksum,
+                )
                 cur.execute(
                     """insert into field_evidence
                        (entity_type,entity_id,field_name,normalized_value,source_record_id,artifact_id,source_text,table_row,
                         parser_name,parser_version,extraction_method,trust,confidence)
-                       values ('vehicle',%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       values (%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        on conflict do nothing""",
-                    (vehicle_id, evidence.field_name, _json(evidence.normalized_value), source_record_uuid, primary_artifact_id,
+                    ("lot" if len(record.vehicle_units) > 1 else "vehicle",
+                     lot_id if len(record.vehicle_units) > 1 else vehicle_id,
+                     evidence.field_name, _json(evidence.normalized_value), source_record_uuid, artifact_id,
                      evidence.source_text, evidence.table_row, self.source, PARSER_VERSION, evidence.extraction_method, evidence.trust, evidence.confidence),
                 )
             return changed or bool(source_row["inserted"])
@@ -378,12 +677,50 @@ class DatabaseRepository:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                select ra.id,ra.storage_path,ra.checksum_sha256,ra.retention_until
+                with artifact_references as (
+                  select link.artifact_id,link.source_record_id,link.last_seen_at as referenced_at
+                  from source_record_artifacts link
+                  union all
+                  select snapshot.artifact_id,snapshot.source_record_id,snapshot.observed_at
+                  from snapshots snapshot where snapshot.artifact_id is not null
+                  union all
+                  select document.artifact_id,document.source_record_id,document.created_at
+                  from documents document where document.artifact_id is not null
+                  union all
+                  select photo.artifact_id,photo.source_record_id,
+                         greatest(photo.first_seen_at,photo.last_seen_at)
+                  from photos photo where photo.artifact_id is not null
+                  union all
+                  select evidence.artifact_id,evidence.source_record_id,evidence.created_at
+                  from field_evidence evidence
+                ),
+                reference_deadlines as (
+                  select reference.artifact_id,
+                         max(
+                           greatest(
+                             reference.referenced_at,
+                             coalesce(event.latest_end,reference.referenced_at)
+                           ) + interval '12 months'
+                         ) as retention_until
+                  from artifact_references reference
+                  left join lateral (
+                    select max(auction_event.ends_at) as latest_end
+                    from auction_events auction_event
+                    where auction_event.source_record_id=reference.source_record_id
+                  ) event on true
+                  group by reference.artifact_id
+                )
+                select ra.id,ra.storage_path,ra.checksum_sha256,
+                       greatest(ra.retention_until,
+                                coalesce(deadline.retention_until,ra.retention_until)) as retention_until
                 from raw_artifacts ra
                 join source_records sr on sr.id=ra.source_record_id
                 left join artifact_tombstones at on at.artifact_id=ra.id
-                where sr.source_id=%s and ra.retention_until <= now() and at.id is null
-                order by ra.retention_until,ra.id
+                left join reference_deadlines deadline on deadline.artifact_id=ra.id
+                where sr.source_id=%s and at.id is null
+                  and greatest(ra.retention_until,
+                               coalesce(deadline.retention_until,ra.retention_until)) <= now()
+                order by retention_until,ra.id
                 """,
                 (self.source_id,),
             )
