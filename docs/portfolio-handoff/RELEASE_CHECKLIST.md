@@ -17,7 +17,8 @@
 - [x] 找車頁已移除流程宣言、廣告預留及重複免責文字
 - [x] 正式頁部署後無瀏覽器錯誤
 - [x] `SUPABASE_SECRET_KEY` 已設定於 GitHub Actions；2026-09-25 的 MOJ／PCC／Customs job 已使用它成功執行
-- [ ] Supabase migration、seed 與 pgTAP 已在正式相容環境完整驗證
+- [x] 全新隔離 Linux Supabase 的 migration、開發 seed 與 200 項 pgTAP 通過；不等於正式資料庫已升級
+- [ ] 正式 Supabase 遷移帳本差異、既有資料備援與上線後 RLS／資料投影已核對
 - [x] 需要 CAPTCHA 或尚未授權的來源未排入無人自動化；它們仍是覆蓋缺口
 - [ ] 行政執行署分署排程連續成功，且至少有一筆正式來源健康紀錄可核對
 - [ ] 臺北惜物網與司法來源的更新頻率已恢復或在頁面標示為過期／人工來源
