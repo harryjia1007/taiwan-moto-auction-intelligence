@@ -31,3 +31,5 @@
 泛標題但 HTML 正文在拍賣標的脈絡明確寫出車輛的案件會在上述有界檢查後納入；只在 PDF、圖片或 CAPTCHA 中列出個別車輛，或只有 CMS 轉址連結而無日期列的案件仍不會猜測。這些涵蓋缺口會顯示警告，可另由中央人工 manifest、正式 feed，或日後經核准的 PDF 文字解析補足；不能把本來源的零筆誤稱全站沒有拍賣。
 
 adapter 程式與 fixture tests 位於 `services/ingest/src/ingest/adapters/moj_enforcement_cms.py` 與 `services/ingest/tests/test_moj_enforcement_cms_adapter.py`。來源政策、獨立 source UUID、repository mapping、CLI、同步警告、公開投影與每日兩次排程已設定；它不覆寫既有 CAPTCHA 人工來源。2026-09-25 的本機唯讀驗證顯示 13/13 分署預檢成功；一次有界 discovery 找到 5 筆車輛候選（臺中 3、屏東 2），並產生 21 個涵蓋警告，其中多個「動產拍賣公告」入口實際是連外或無日期列的導覽頁，不能當成已完整檢查的案件清單。臺中其中一筆可保存官方 HTML 並完成解析；這些只是本機讀取結果，正式 GitHub 排程仍須以修正後的新 run 驗證。個別分署失敗時 run 維持 `PARTIAL`，全部分署都無法安全檢查時整次失敗，既有正式資料不會被當成零案件清除。即使一次正式唯讀同步成功，也只能代表當次可讀的 CMS 公告清單，不代表中央 CAPTCHA 清單或全國所有車輛拍賣已完整涵蓋。
+
+2026-09-25 的 GitHub-hosted 正式同步在 13 站都留下空白的 branch-discovery 例外訊息，無法從舊紀錄判定失敗類別；臺灣本機的單站健康檢查可通過，但這不等於 GitHub 排程已修復。後續分署層級的失敗診斷只記錄固定階段（`robots`、`sitemap`、`homepage`、`list_discovery`、`announcement_list`、`generic_detail`）與例外類別，不記錄原始例外文字、案件內容或來源網址。這項變更僅改善定位能力，不放寬 robots、CAPTCHA、網域、重試、速率或失敗時保留既有資料的邊界；確認 GitHub runner 的實際失敗原因後才決定下一步。
