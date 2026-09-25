@@ -29,7 +29,14 @@ _LABELED_VEHICLE_IDENTIFIER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PHONE_PATTERN = re.compile(
-    r"(?<!\d)(?:09\d{2}(?:[-－ ]?\d{3}){2}|0\d{1,2}[-－ ]?\d{6,8})"
+    r"(?<!\d)(?:"
+    r"09\d{2}(?:[-－ ]?\d{3}){2}"
+    r"|0\d{1,2}[-－ ]?\d{6,8}"
+    # Official notices also split a landline's subscriber digits, sometimes
+    # with a parenthesized area code. Require both separators and 7-8
+    # subscriber digits so ordinary ROC dates and prices are left intact.
+    r"|(?:\(0[2-8]\d{0,2}\)|0[2-8]\d{0,2})[-－–— ]+\d{3,4}[-－–— ]+\d{4}"
+    r")"
     r"(?:\s*(?:#|分機)\s*\d+)?(?!\d)"
 )
 _EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)

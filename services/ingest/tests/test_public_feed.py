@@ -133,6 +133,77 @@ def test_public_feed_redacts_identifier_leaks_from_text_urls_and_media():
         assert private_value not in serialized
 
 
+@pytest.mark.parametrize(
+    "synthetic_phone",
+    [
+        "02-123-4567",
+        "02-1234-5678",
+        "(02) 1234-5678",
+        "02 1234 5678",
+        "02－123－4567",
+        "02–123–4567",
+    ],
+)
+def test_public_feed_redacts_split_landlines_in_every_public_text_field(synthetic_phone: str) -> None:
+    item = record(
+        identifiers=[],
+        official_title=f"公告洽詢 {synthetic_phone}",
+        official_case_number=f"案號備註 {synthetic_phone}",
+        organization=f"承辦單位 {synthetic_phone}",
+        brand=f"廠牌備註 {synthetic_phone}",
+        model=f"型號備註 {synthetic_phone}",
+        color=f"顏色備註 {synthetic_phone}",
+        location=f"洽詢 {synthetic_phone}",
+        fee_notes=[f"費用洽詢 {synthetic_phone}"],
+    )
+
+    payload = public_listing_payload(item, source_name=f"來源 {synthetic_phone}")
+
+    for field in (
+        "source_name", "official_title", "official_case_number", "organization_name",
+        "brand_name", "model_name", "color", "location",
+    ):
+        assert "聯絡電話已隱藏" in payload[field]
+    assert payload["fee_notes"] == ["費用洽詢 聯絡電話已隱藏"]
+    assert synthetic_phone not in str(payload)
+
+
+def test_public_feed_rejects_split_landline_in_source_id_and_official_links() -> None:
+    synthetic_phone = "(02) 1234 5678"
+    encoded_phone = "%2802%29%201234%205678"
+    item = record(
+        identifiers=[],
+        source_record_id=f"notice-{synthetic_phone}",
+        official_url=f"https://shwoo.gov.taipei/item?contact={encoded_phone}",
+        evidence=[EvidenceRef(
+            field_name="official_attachment_url",
+            normalized_value=f"https://shwoo.gov.taipei/file/notice.pdf?contact={encoded_phone}",
+            source_text="合成測試附件",
+        )],
+    )
+
+    payload = public_listing_payload(item)
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://shwoo.gov.taipei/"
+    assert payload["documents"] == []
+    assert synthetic_phone not in str(payload)
+    assert encoded_phone not in str(payload)
+
+
+def test_public_feed_preserves_dates_prices_and_existing_contiguous_phone_redaction() -> None:
+    item = record(
+        identifiers=[],
+        official_title="115-09-25 公告；2026/09/25 拍賣；底價 NT$18,000",
+        location="聯絡 02-12345678",
+    )
+
+    payload = public_listing_payload(item)
+
+    assert payload["official_title"] == "115-09-25 公告；2026/09/25 拍賣；底價 NT$18,000"
+    assert payload["location"] == "聯絡 聯絡電話已隱藏"
+
+
 def test_public_feed_masks_plate_like_text_even_if_source_parser_missed_the_identifier():
     unparsed_plate = "KSS–7890"
     item = record(
