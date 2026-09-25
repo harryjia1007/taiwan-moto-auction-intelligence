@@ -184,6 +184,10 @@ def _sanitize_public_text(
         lambda match: _mask_unparsed_plate_token(match, show_masked_plates=show_masked_plates),
         sanitized,
     )
+    # A source parser may miss a plate printed without a dash or label. Treat
+    # such compact letter-and-digit tokens as private rather than guessing
+    # whether they are plates or model codes in the anonymous projection.
+    sanitized = _COMPACT_PLATE_PATTERN.sub("已隱藏", sanitized)
     return sanitized
 
 

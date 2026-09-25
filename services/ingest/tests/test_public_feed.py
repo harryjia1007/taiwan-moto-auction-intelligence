@@ -193,6 +193,29 @@ def test_public_feed_suppresses_labeled_unparsed_plates_everywhere(label: str, p
     assert plate not in str(payload)
 
 
+def test_public_feed_suppresses_unlabeled_compact_plate_in_public_text() -> None:
+    item = record(
+        identifiers=[], ends_at=None,
+        source_record_id="notice-ABC1234",
+        official_url="https://www.tcy.moj.gov.tw/notice/ABC1234/post",
+        official_title="普通重型機車 ABC1234 動產拍賣",
+        official_case_number="ABC1234",
+        description="標的為機車 ABC1234，完整來源說明不應公開。",
+        fee_notes=["相關費用請查 ABC1234 公告"],
+    )
+
+    payload = public_listing_payload(item, source_adapter="moj_enforcement_cms")
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
+    assert payload["official_title"] == "普通重型機車 已隱藏 動產拍賣"
+    assert payload["official_case_number"] == "已隱藏"
+    assert payload["description"] is None
+    assert payload["fee_notes"] == ["相關費用請查 已隱藏 公告"]
+    assert payload["plate_number"] is None
+    assert "ABC1234" not in str(payload)
+
+
 def test_public_feed_projects_only_safe_official_attachment_links_without_evidence_text():
     item = record(
         identifiers=[
