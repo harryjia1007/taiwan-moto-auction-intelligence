@@ -242,7 +242,9 @@ async def test_robots_redirect_outside_reviewed_paths_is_never_contacted() -> No
             await adapter.discover()
 
     assert contacted == [f"{BRANCH.origin}/robots.txt"]
-    assert any("outside the reviewed robots paths" in warning for warning in adapter.discovery_warnings)
+    assert adapter.discovery_warnings == [
+        "tcy: branch discovery failed closed: stage=robots; error=SourceAccessDenied"
+    ]
 
 
 @pytest.mark.asyncio
@@ -262,10 +264,10 @@ async def test_policy_response_does_not_retry_or_continue_on_same_branch(status_
             await adapter.discover()
 
     assert contacted == [f"{BRANCH.origin}/robots.txt"]
-    assert any(
-        ("HTTP 403" if status_code == 403 else "rate limited") in warning
-        for warning in adapter.discovery_warnings
-    )
+    expected_error = "SourceAccessDenied" if status_code == 403 else "SourceRateLimited"
+    assert adapter.discovery_warnings == [
+        f"tcy: branch discovery failed closed: stage=robots; error={expected_error}"
+    ]
 
 
 @pytest.mark.asyncio
@@ -342,7 +344,42 @@ async def test_branch_cms_fails_closed_when_robots_disallows_collection() -> Non
         with pytest.raises(RuntimeError, match="could be checked safely"):
             await adapter.discover()
 
-    assert any("robots.txt disallows" in warning for warning in adapter.discovery_warnings)
+    assert adapter.discovery_warnings == [
+        "tcy: branch discovery failed closed: stage=robots; error=SourceAccessDenied"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_path", "expected_stage", "message"),
+    [
+        ("/robots.txt", "robots", ""),
+        ("/sitemap", "sitemap", "https://example.invalid/?case=SYNTH-1234"),
+        ("/", "homepage", ""),
+    ],
+)
+async def test_branch_discovery_diagnostic_has_stage_and_type_but_no_raw_exception_text(
+    failure_path: str, expected_stage: str, message: str,
+) -> None:
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == failure_path:
+            raise httpx.ReadError(message, request=request)
+        return response_for(request, contacted)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojEnforcementCmsAdapter(
+            branches=(BRANCH,), client=client, request_interval=0, max_request_attempts=1,
+        )
+        with pytest.raises(RuntimeError, match="could be checked safely"):
+            await adapter.discover()
+
+    assert adapter.discovery_warnings == [
+        f"tcy: branch discovery failed closed: stage={expected_stage}; error=ReadError"
+    ]
+    if message:
+        assert message not in adapter.discovery_warnings[0]
 
 
 @pytest.mark.asyncio

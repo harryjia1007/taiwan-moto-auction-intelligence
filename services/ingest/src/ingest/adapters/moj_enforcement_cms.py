@@ -164,6 +164,9 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         self._request_lock = asyncio.Lock()
         self._now = now or (lambda: datetime.now(TAIPEI))
         self.discovery_warnings: list[str] = []
+        # Discovery visits branches sequentially. Keep only a fixed stage name
+        # for safe diagnostics; never retain a URL or notice body here.
+        self._diagnostic_stage = "branch_preflight"
         self._robots_by_host: dict[str, RobotFileParser] = {}
         self._detail_artifacts: dict[str, RawArtifact] = {}
         self._cached_detail_bytes = 0
@@ -526,6 +529,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         return items, dates, has_next
 
     async def _preflight(self, branch: EnforcementBranch) -> tuple[str, bytes]:
+        self._diagnostic_stage = "robots"
         robots_url = f"{branch.origin}/robots.txt"
         robots = await self._request(
             robots_url,
@@ -536,6 +540,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         self._require_mime(robots, {"text/plain"}, "robots")
         sitemap_url = self._check_robots(robots.text, branch, [branch.origin + "/"])
         self._require_robots_allowed(branch, sitemap_url)
+        self._diagnostic_stage = "sitemap"
         sitemap = await self._request(
             sitemap_url,
             expected_host=branch.host,
@@ -546,6 +551,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         if len(sitemap.content) > self.MAX_SITEMAP_BYTES:
             raise ValueError(f"{branch.code}: sitemap exceeds {self.MAX_SITEMAP_BYTES} bytes")
         self._validate_sitemap(sitemap.content, branch)
+        self._diagnostic_stage = "homepage"
         homepage = await self._request(
             branch.origin + "/", expected_host=branch.host, referer=sitemap_url,
             maximum_bytes=self.MAX_HTML_BYTES,
@@ -556,6 +562,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
 
     async def _discover_branch(self, branch: EnforcementBranch, cutoff: datetime) -> list[DiscoveredItem]:
         robots_text, homepage = await self._preflight(branch)
+        self._diagnostic_stage = "list_discovery"
         lists = self._announcement_lists(homepage, branch)
         if not lists:
             raise ValueError(f"{branch.code}: no same-host announcement list was published on the homepage")
@@ -563,6 +570,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         generic_candidates: dict[str, DiscoveredItem] = {}
         checked_lists = 0
         for list_url in lists:
+            self._diagnostic_stage = "announcement_list"
             try:
                 self._check_robots(robots_text, branch, [list_url])
                 for page in range(1, self.MAX_LIST_PAGES + 1):
@@ -600,6 +608,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 f"{self.MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH} detail pages were checked"
             )
         for item in candidates[: self.MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH]:
+            self._diagnostic_stage = "generic_detail"
             try:
                 official_url = str(item.official_url)
                 self._require_robots_allowed(branch, official_url)
@@ -639,6 +648,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         found: dict[str, DiscoveredItem] = {}
         branches_checked = 0
         for branch in self.branches:
+            self._diagnostic_stage = "branch_preflight"
             try:
                 async with asyncio.timeout(self.branch_deadline_seconds):
                     branch_items = await self._discover_branch(branch, cutoff)
@@ -650,7 +660,14 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                     f"{branch.code}: branch discovery exceeded {self.branch_deadline_seconds:g} seconds"
                 )
             except Exception as exc:
-                self.discovery_warnings.append(f"{branch.code}: branch discovery failed closed: {exc}")
+                # httpx transport exceptions may have an empty string form.
+                # Their raw message can also contain a URL or notice text, so
+                # report only a bounded class and a fixed, code-owned stage.
+                error_kind = re.sub(r"[^A-Za-z0-9_]", "", type(exc).__name__)[:64] or "Exception"
+                self.discovery_warnings.append(
+                    f"{branch.code}: branch discovery failed closed: "
+                    f"stage={self._diagnostic_stage}; error={error_kind}"
+                )
         if not branches_checked:
             raise RuntimeError("No Administrative Enforcement branch CMS could be checked safely")
         return sorted(found.values(), key=lambda item: item.source_record_id)
