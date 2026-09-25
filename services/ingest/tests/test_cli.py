@@ -461,6 +461,65 @@ async def test_public_zero_discovery_is_persisted_but_fails_the_scheduler(monkey
 
 
 @pytest.mark.asyncio
+async def test_public_shwoo_partial_discovery_keeps_item_but_fails_scheduler(monkeypatch) -> None:
+    completed: list[SyncResult] = []
+    published: list[str] = []
+    item = DiscoveredItem(
+        source_record_id="123456",
+        official_url="https://shwoo.gov.taipei/shwoo/newproduct/newproduct00/product?AUID=123456",
+        discovery_url="https://shwoo.gov.taipei/shwoo/browse/browse00/",
+        title="普通重型機車 1 台",
+    )
+
+    class Publisher:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def start(self) -> str:
+            return "run-id"
+
+        async def publish(self, discovered_item, artifacts, record) -> bool:
+            published.append(discovered_item.source_record_id)
+            return True
+
+        async def finish(self, result: SyncResult) -> None:
+            completed.append(result)
+
+        async def close(self) -> None:
+            pass
+
+    class Adapter:
+        discovery_warnings = ["Shwoo unrestricted search timed out for keyword 機車"]
+
+        async def discover(self):
+            return [item]
+
+        async def fetch(self, discovered_item):
+            return []
+
+        async def parse(self, discovered_item, artifacts):
+            return object()
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "test-secret")
+    monkeypatch.setattr(cli_module, "SupabasePublicPublisher", Publisher)
+    monkeypatch.setattr(cli_module, "adapter_for", lambda source: Adapter())
+
+    with pytest.raises(typer.Exit) as raised:
+        await run_publish_public("shwoo", None)
+
+    assert raised.value.exit_code == 1
+    assert published == ["123456"]
+    assert len(completed) == 1
+    assert completed[0].parsed == 1
+    assert completed[0].failed == 0
+    assert completed[0].warnings == Adapter.discovery_warnings
+
+
+@pytest.mark.asyncio
 async def test_public_health_publication_failure_cannot_leave_actions_green(monkeypatch) -> None:
     class FakePublisher:
         def __init__(self, *args, **kwargs) -> None:

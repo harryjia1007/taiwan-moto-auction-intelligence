@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from ingest.adapters.shwoo import ShwooAdapter
+from ingest.adapters.base import SourceRateLimited
 from ingest.models import DiscoveredItem
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -36,7 +37,7 @@ async def test_discovery_deduplicates_keyword_and_eligibility_results() -> None:
 @pytest.mark.asyncio
 async def test_discovery_keeps_other_keyword_results_after_one_timeout() -> None:
     browse = b'<form id="autionId" method="post" action="/shwoo/browse/browse00/advancedQuery"></form>'
-    results = '<a href="/shwoo/newproduct/newproduct00/product?AUID=939528">機器腳踏車1台</a>'
+    results = (FIXTURES / "shwoo_search_vehicle_test_only.html").read_text(encoding="utf-8")
     advanced_calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -57,8 +58,64 @@ async def test_discovery_keeps_other_keyword_results_after_one_timeout() -> None
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
         adapter = ShwooAdapter(client=client, request_interval=0)
         items = await adapter.discover()
+        first_run_warnings = list(adapter.discovery_warnings)
+        repeat_items = await adapter.discover()
 
-    assert [item.source_record_id for item in items] == ["939528"]
+    assert [item.source_record_id for item in items] == ["123456"]
+    assert first_run_warnings == ["Shwoo unrestricted search timed out for keyword 機車"]
+    assert [item.source_record_id for item in repeat_items] == ["123456"]
+    assert adapter.discovery_warnings == []
+
+
+@pytest.mark.asyncio
+async def test_completed_result_timeout_keeps_active_items_but_warns_partial_coverage() -> None:
+    browse = b'<form id="autionId" method="post" action="/shwoo/browse/browse00/advancedQuery"></form>'
+    results = (FIXTURES / "shwoo_search_vehicle_test_only.html").read_text(encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        if request.url.path.endswith("browse00/"):
+            return httpx.Response(200, content=browse, headers={"content-type": "text/html"})
+        if request.url.path.endswith("advancedQuery"):
+            return httpx.Response(200, text=results, headers={"content-type": "text/html"})
+        if request.url.path.endswith("bidresult") and request.method == "GET":
+            return httpx.Response(200, text="<form></form>", headers={"content-type": "text/html"})
+        if request.url.path.endswith("bidresult"):
+            raise httpx.ReadTimeout("official completed search did not answer", request=request)
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        adapter = ShwooAdapter(client=client, request_interval=0)
+        items = await adapter.discover()
+
+    assert [item.source_record_id for item in items] == ["123456"]
+    assert adapter.discovery_warnings == [
+        "Shwoo completed-result search was incomplete (ReadTimeout); prior results were retained"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_path", ["advancedQuery", "bidresult"])
+async def test_rate_limit_stops_shwoo_discovery_instead_of_becoming_partial(blocked_path: str) -> None:
+    browse = b'<form id="autionId" method="post" action="/shwoo/browse/browse00/advancedQuery"></form>'
+    results = (FIXTURES / "shwoo_search_vehicle_test_only.html").read_text(encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        if request.url.path.endswith("browse00/"):
+            return httpx.Response(200, content=browse, headers={"content-type": "text/html"})
+        if request.url.path.endswith(blocked_path):
+            return httpx.Response(429, headers={"retry-after": "60"})
+        return httpx.Response(200, text=results, headers={"content-type": "text/html"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        adapter = ShwooAdapter(client=client, request_interval=0)
+        with pytest.raises(SourceRateLimited, match="retry after 60 seconds"):
+            await adapter.discover()
+
+    assert adapter.discovery_warnings == []
 
 
 def test_completed_result_uses_official_title_cell_not_query_link() -> None:

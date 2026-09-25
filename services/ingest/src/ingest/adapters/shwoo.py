@@ -50,6 +50,7 @@ class ShwooAdapter(SourceAdapter):
         )
         self._owns_client = client is None
         self.request_interval = request_interval
+        self.discovery_warnings: list[str] = []
         self._last_request = 0.0
         self._request_lock = asyncio.Lock()
         self._robots = LiveRobotsPolicy(
@@ -150,6 +151,7 @@ class ShwooAdapter(SourceAdapter):
         return list(found.values())
 
     async def discover(self) -> list[DiscoveredItem]:
+        self.discovery_warnings.clear()
         self._robots.reset()
         landing = await self._request("GET", self.BROWSE_URL)
         soup = BeautifulSoup(landing.content, "html.parser")
@@ -169,8 +171,14 @@ class ShwooAdapter(SourceAdapter):
                     })
                 except httpx.TimeoutException:
                     # One slow keyword response must not discard listings already
-                    # discovered from the other official search variants. Policy
-                    # errors (403/429) still propagate and fail closed.
+                    # discovered from the other official search variants. The
+                    # incomplete search must still keep the run PARTIAL, never
+                    # advance its last-successful timestamp. Policy errors
+                    # (403/429) still propagate and fail closed.
+                    eligibility = "recycler-only" if recycler_only else "unrestricted"
+                    self.discovery_warnings.append(
+                        f"Shwoo {eligibility} search timed out for keyword {keyword}"
+                    )
                     continue
                 for item in self._detail_items(response.content, str(response.url), recycler_only):
                     discovered[item.source_record_id] = item
@@ -191,8 +199,11 @@ class ShwooAdapter(SourceAdapter):
                 for item in self._detail_items(result_page.content, str(result_page.url), False, True):
                     if any(candidate in item.title for candidate in self.KEYWORDS):
                         discovered.setdefault(item.source_record_id, item)
-        except httpx.HTTPError:
-            pass
+        except httpx.HTTPError as exc:
+            self.discovery_warnings.append(
+                "Shwoo completed-result search was incomplete "
+                f"({type(exc).__name__}); prior results were retained"
+            )
         return list(discovered.values())
 
     @staticmethod
