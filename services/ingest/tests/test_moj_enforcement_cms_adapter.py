@@ -854,6 +854,73 @@ async def test_preflight_circuit_breaker_fails_run_when_no_branch_was_checked() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["robots", "sitemap", "homepage"])
+async def test_branch_deadline_during_preflight_opens_circuit_without_contacting_remaining_branch(
+    stage: str,
+) -> None:
+    branches = (BRANCH, SECOND_BRANCH, THIRD_BRANCH, FOURTH_BRANCH)
+    adapter = MojEnforcementCmsAdapter(
+        branches=branches,
+        request_interval=0,
+        branch_deadline_seconds=0.01,
+    )
+    checked: list[str] = []
+
+    async def stalled_preflight(branch: EnforcementBranch) -> tuple[str, bytes]:
+        checked.append(branch.code)
+        adapter._diagnostic_stage = stage
+        await asyncio.sleep(0.05)
+        return "", b""
+
+    adapter._preflight = stalled_preflight  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="No Administrative Enforcement branch CMS"):
+            await adapter.discover()
+    finally:
+        await adapter.close()
+
+    assert checked == [branch.code for branch in branches[:3]]
+    assert adapter.discovery_warnings[:3] == [
+        f"{branch.code}: branch discovery exceeded 0.01 seconds; stage={stage}; error=TimeoutError"
+        for branch in branches[:3]
+    ]
+    assert "3 consecutive async_timeout failures" in adapter.discovery_warnings[3]
+    assert adapter.discovery_warnings[4].startswith(f"{FOURTH_BRANCH.code}: branch not checked")
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_branch_deadline_preflight_timeout_opens_circuit() -> None:
+    branches = (BRANCH, SECOND_BRANCH, THIRD_BRANCH, FOURTH_BRANCH)
+    adapter = MojEnforcementCmsAdapter(
+        branches=branches,
+        request_interval=0,
+        branch_deadline_seconds=0.01,
+    )
+    checked: list[str] = []
+
+    async def stalled_preflight(branch: EnforcementBranch) -> tuple[str, bytes]:
+        checked.append(branch.code)
+        adapter._diagnostic_stage = "sitemap"
+        await asyncio.sleep(0.05)
+        return "", b""
+
+    adapter._preflight = stalled_preflight  # type: ignore[method-assign]
+    try:
+        health = await adapter.healthcheck()
+    finally:
+        await adapter.close()
+
+    assert health.status == "DEGRADED"
+    assert checked == [branch.code for branch in branches[:3]]
+    assert health.warnings[:3] == [
+        f"{branch.code}: preflight exceeded 0.01 seconds; stage=sitemap; error=TimeoutError"
+        for branch in branches[:3]
+    ]
+    assert "3 consecutive async_timeout failures" in health.warnings[3]
+    assert health.warnings[4].startswith(f"{FOURTH_BRANCH.code}: branch not checked")
+
+
+@pytest.mark.asyncio
 async def test_healthcheck_timeout_is_isolated_and_remains_partial() -> None:
     adapter = MojEnforcementCmsAdapter(
         branches=(BRANCH, SECOND_BRANCH),

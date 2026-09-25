@@ -117,6 +117,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     MAX_SITEMAP_BYTES = 8 * 1024 * 1024
     MAX_ATTACHMENTS = 10
     PREFLIGHT_CIRCUIT_BREAKER_THRESHOLD = 3
+    PREFLIGHT_STAGES = frozenset({"robots", "sitemap", "homepage"})
     SAFE_ARTIFACT_RESPONSE_HEADERS = frozenset({
         "cache-control",
         "content-disposition",
@@ -600,6 +601,27 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         except TimeoutError as exc:
             raise _PreflightConnectivityFailure("async_timeout", branch, exc) from exc
 
+    @staticmethod
+    def _count_preflight_failure(
+        failure_kind: str, previous_kind: str | None, previous_count: int,
+    ) -> tuple[str, int]:
+        return failure_kind, previous_count + 1 if failure_kind == previous_kind else 1
+
+    def _append_preflight_circuit_warnings(
+        self, warnings: list[str], branch_index: int, failure_kind: str, count: int,
+    ) -> bool:
+        if count < self.PREFLIGHT_CIRCUIT_BREAKER_THRESHOLD:
+            return False
+        warnings.append(
+            "Administrative Enforcement CMS preflight circuit breaker opened after "
+            f"{count} consecutive {failure_kind} failures"
+        )
+        warnings.extend(
+            f"{skipped.code}: branch not checked because the preflight circuit breaker was open"
+            for skipped in self.branches[branch_index + 1:]
+        )
+        return True
+
     async def _discover_branch(self, branch: EnforcementBranch, cutoff: datetime) -> list[DiscoveredItem]:
         robots_text, homepage = await self._preflight_with_connectivity_signal(branch)
         self._diagnostic_stage = "list_discovery"
@@ -700,34 +722,36 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 consecutive_failure_kind = None
                 consecutive_preflight_failures = 0
             except _PreflightConnectivityFailure as exc:
-                if exc.failure_kind == consecutive_failure_kind:
-                    consecutive_preflight_failures += 1
-                else:
-                    consecutive_failure_kind = exc.failure_kind
-                    consecutive_preflight_failures = 1
+                consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                    exc.failure_kind, consecutive_failure_kind, consecutive_preflight_failures,
+                )
                 cause = exc.__cause__ or exc
                 error_kind = re.sub(r"[^A-Za-z0-9_]", "", type(cause).__name__)[:64] or "Exception"
                 self.discovery_warnings.append(
                     f"{branch.code}: branch discovery failed closed: "
                     f"stage={self._diagnostic_stage}; error={error_kind}"
                 )
-                if consecutive_preflight_failures >= self.PREFLIGHT_CIRCUIT_BREAKER_THRESHOLD:
-                    remaining = self.branches[branch_index + 1:]
-                    self.discovery_warnings.append(
-                        "Administrative Enforcement CMS preflight circuit breaker opened after "
-                        f"{consecutive_preflight_failures} consecutive {exc.failure_kind} failures"
-                    )
-                    self.discovery_warnings.extend(
-                        f"{skipped.code}: branch not checked because the preflight circuit breaker was open"
-                        for skipped in remaining
-                    )
+                if self._append_preflight_circuit_warnings(
+                    self.discovery_warnings, branch_index, exc.failure_kind, consecutive_preflight_failures,
+                ):
                     break
             except TimeoutError:
-                consecutive_failure_kind = None
-                consecutive_preflight_failures = 0
+                stage = self._diagnostic_stage
                 self.discovery_warnings.append(
-                    f"{branch.code}: branch discovery exceeded {self.branch_deadline_seconds:g} seconds"
+                    f"{branch.code}: branch discovery exceeded {self.branch_deadline_seconds:g} seconds; "
+                    f"stage={stage}; error=TimeoutError"
                 )
+                if stage in self.PREFLIGHT_STAGES:
+                    consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                        "async_timeout", consecutive_failure_kind, consecutive_preflight_failures,
+                    )
+                    if self._append_preflight_circuit_warnings(
+                        self.discovery_warnings, branch_index, "async_timeout", consecutive_preflight_failures,
+                    ):
+                        break
+                else:
+                    consecutive_failure_kind = None
+                    consecutive_preflight_failures = 0
             except Exception as exc:
                 consecutive_failure_kind = None
                 consecutive_preflight_failures = 0
@@ -1113,27 +1137,26 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 consecutive_failure_kind = None
                 consecutive_preflight_failures = 0
             except _PreflightConnectivityFailure as exc:
-                if exc.failure_kind == consecutive_failure_kind:
-                    consecutive_preflight_failures += 1
-                else:
-                    consecutive_failure_kind = exc.failure_kind
-                    consecutive_preflight_failures = 1
+                consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                    exc.failure_kind, consecutive_failure_kind, consecutive_preflight_failures,
+                )
                 warnings.append(f"{branch.code}: {exc}")
-                if consecutive_preflight_failures >= self.PREFLIGHT_CIRCUIT_BREAKER_THRESHOLD:
-                    remaining = self.branches[branch_index + 1:]
-                    warnings.append(
-                        "Administrative Enforcement CMS preflight circuit breaker opened after "
-                        f"{consecutive_preflight_failures} consecutive {exc.failure_kind} failures"
-                    )
-                    warnings.extend(
-                        f"{skipped.code}: branch not checked because the preflight circuit breaker was open"
-                        for skipped in remaining
-                    )
+                if self._append_preflight_circuit_warnings(
+                    warnings, branch_index, exc.failure_kind, consecutive_preflight_failures,
+                ):
                     break
             except TimeoutError:
-                consecutive_failure_kind = None
-                consecutive_preflight_failures = 0
-                warnings.append(f"{branch.code}: preflight exceeded {self.branch_deadline_seconds:g} seconds")
+                warnings.append(
+                    f"{branch.code}: preflight exceeded {self.branch_deadline_seconds:g} seconds; "
+                    f"stage={self._diagnostic_stage}; error=TimeoutError"
+                )
+                consecutive_failure_kind, consecutive_preflight_failures = self._count_preflight_failure(
+                    "async_timeout", consecutive_failure_kind, consecutive_preflight_failures,
+                )
+                if self._append_preflight_circuit_warnings(
+                    warnings, branch_index, "async_timeout", consecutive_preflight_failures,
+                ):
+                    break
             except Exception as exc:
                 consecutive_failure_kind = None
                 consecutive_preflight_failures = 0

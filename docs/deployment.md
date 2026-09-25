@@ -50,6 +50,8 @@ The isolated Linux checks for draft [PR #12](https://github.com/harryjia1007/tai
 
 The Administrative Enforcement central search remains excluded from unattended schedules because its discovery form requires a human-completed CAPTCHA. A direct result GET without a CAPTCHA session is not used as an automation path. After a human performs the official `汽機車` search, either save every result page under the ignored `.data/moj-enforcement-export/` directory or save validated detail URLs in `.data/moj-enforcement-manifest.json`. The importer parses exported HTML offline, then reads only robots-allowed same-host details; it never fetches central Query pages, PDF bytes, or JPG/GIF images. Official PDF full text remains a verified outbound link. This is separate from the scheduled `moj_enforcement_cms` branch-announcement source.
 
+For the branch CMS network failure, a [secret-free, read-only GCP Taiwan-region preflight](ingestion/cms-gcp-readiness-probe.md) is available as a candidate-environment test. It only checks fixed official branch robots, sitemaps and homepages; it does not migrate the publisher, create a schedule, or prove that listings were synchronized. Do not move CMS schedule ownership from GitHub Actions or inject production secrets until the probe passes in the chosen environment and the hosted migration ledger and source-policy gates are reviewed.
+
 The source dashboard must retain truthful readiness states. `PARTIAL` means the adapter is usable under its documented limits, not that nationwide discovery is complete. Only promote a source to `ACTIVE` after a successful real database sync, raw-artifact persistence, and an operator review of source metrics.
 
 ## Public portfolio boundary
