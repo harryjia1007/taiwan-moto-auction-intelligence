@@ -97,7 +97,11 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     MAX_LISTS_PER_BRANCH = 2
     MAX_LIST_PAGES = 2
     PAGE_SIZE = 30
+    MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH = 12
     MAX_BYTES = 25 * 1024 * 1024
+    MAX_HTML_BYTES = 1 * 1024 * 1024
+    MAX_CACHED_DETAIL_BYTES = 8 * 1024 * 1024
+    MAX_ROBOTS_BYTES = 256 * 1024
     MAX_SITEMAP_BYTES = 8 * 1024 * 1024
     MAX_ATTACHMENTS = 10
     SAFE_ARTIFACT_RESPONSE_HEADERS = frozenset({
@@ -114,6 +118,19 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         r"曳引車|半拖車|拖車|遊覽車"
     )
     AUCTION_PATTERN = re.compile(r"拍賣|變賣|標售|應買")
+    NON_VEHICLE_TITLE_PATTERN = re.compile(r"不動產|土地|建物|房屋|房地")
+    VEHICLE_FEE_BOILERPLATE_PATTERN = re.compile(r"(?:汽車|機車)燃料(?:使用)?費|(?:汽車|機車)牌照稅")
+    LOT_CONTEXT_PATTERN = re.compile(
+        r"(?:標的|拍賣品|拍賣物件|拍賣|變賣|標售|應買)\s*(?:為|有|含|包括|：|:)?\s*$"
+    )
+    EXCLUDED_LOT_CONTEXT_PATTERN = re.compile(r"另案|另行|不(?:在|屬|含|包括)|排除|非本次")
+    VEHICLE_COUNT_PATTERN = re.compile(r"(?:汽機車|汽車|機車|車輛|重機)\s*[一二三四五六七八九十\d]+\s*[輛台部]")
+    EMPTY_LIST_PATTERN = re.compile(
+        r"查無(?:相關|符合條件)?資料|目前(?:尚)?無資料|尚無(?:任何)?資料|沒有(?:符合條件的)?資料"
+    )
+    EMPTY_LIST_SELECTORS = (
+        ".no_data", ".nodata", ".no-result", ".noresult", "table.table_list td[colspan]",
+    )
     LIST_LABELS = ("動產拍賣公告", "拍賣品消息", "電子公布欄", "最新消息")
 
     def __init__(
@@ -148,6 +165,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         self._now = now or (lambda: datetime.now(TAIPEI))
         self.discovery_warnings: list[str] = []
         self._robots_by_host: dict[str, RobotFileParser] = {}
+        self._detail_artifacts: dict[str, RawArtifact] = {}
+        self._cached_detail_bytes = 0
 
     async def close(self) -> None:
         if self._owns_client:
@@ -170,38 +189,95 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         if expected_host and parsed.hostname != expected_host:
             raise ValueError(f"Blocked cross-branch redirect: {url}")
 
-    async def _request(self, url: str, *, expected_host: str, referer: str | None = None) -> httpx.Response:
+    async def _request(
+        self,
+        url: str,
+        *,
+        expected_host: str,
+        referer: str | None = None,
+        maximum_bytes: int | None = None,
+        robots_preflight: bool = False,
+    ) -> httpx.Response:
         self._validate_url(url, expected_host=expected_host)
+        if robots_preflight:
+            parsed = urlsplit(url)
+            if parsed.path != "/robots.txt" or parsed.query or parsed.fragment:
+                raise ValueError("CMS robots preflight must start at the exact /robots.txt path")
+        maximum = maximum_bytes if maximum_bytes is not None else self.MAX_BYTES
+        if maximum <= 0 or maximum > self.MAX_BYTES:
+            raise ValueError("CMS response-size boundary must be within the configured maximum")
         last_error: Exception | None = None
         for attempt in range(self.max_request_attempts):
             async with self._request_lock:
-                delay = self.request_interval - (time.monotonic() - self._last_request)
-                if delay > 0:
-                    await asyncio.sleep(delay)
                 try:
                     current_url = url
                     for _ in range(5):
-                        headers = {"Referer": referer} if referer else None
-                        response = await self.client.get(
+                        delay = self.request_interval - (time.monotonic() - self._last_request)
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                        # Some branch CMS hosts return invalid gzip bytes to
+                        # clients advertising compression. Request identity
+                        # encoding while retaining every safety check below.
+                        headers = {"Accept-Encoding": "identity"}
+                        if referer:
+                            headers["Referer"] = referer
+                        async with self.client.stream(
+                            "GET",
                             current_url,
                             headers=headers,
                             follow_redirects=False,
                             timeout=self.request_timeout_seconds,
-                        )
-                        self._last_request = time.monotonic()
-                        if not response.is_redirect:
+                        ) as streamed:
+                            self._last_request = time.monotonic()
+                            if streamed.is_redirect:
+                                location = streamed.headers.get("location")
+                                if not location:
+                                    raise ValueError("CMS redirect response did not include a location")
+                                current_url = urljoin(str(streamed.url), location)
+                                self._validate_url(current_url, expected_host=expected_host)
+                                if robots_preflight:
+                                    target = urlsplit(current_url)
+                                    if target.path not in {"/robots.txt", "/robots"} or target.query or target.fragment:
+                                        raise SourceAccessDenied(
+                                            "CMS robots preflight redirected outside the reviewed robots paths"
+                                        )
+                                else:
+                                    branch = next(
+                                        (candidate for candidate in self.branches if candidate.host == expected_host),
+                                        None,
+                                    )
+                                    if branch is None:
+                                        raise ValueError(f"No registered branch owns redirect host {expected_host}")
+                                    # The next hop is a separate request target.
+                                    self._require_robots_allowed(branch, current_url)
+                                continue
+                            enforce_http_status(streamed)
+                            content_length = streamed.headers.get("content-length", "").strip()
+                            if content_length.isdigit() and int(content_length) > maximum:
+                                raise ValueError(f"Artifact exceeds {maximum} bytes")
+                            body = bytearray()
+                            async for chunk in streamed.aiter_bytes():
+                                if len(chunk) > maximum - len(body):
+                                    raise ValueError(f"Artifact exceeds {maximum} bytes")
+                                body.extend(chunk)
+                            # aiter_bytes() already decoded Content-Encoding.
+                            # Reusing that header would make the reconstructed
+                            # response decode again (and can raise on valid gzip).
+                            decoded_headers = {
+                                name: value for name, value in streamed.headers.items()
+                                if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+                            }
+                            decoded_headers["content-length"] = str(len(body))
+                            response = httpx.Response(
+                                streamed.status_code,
+                                request=streamed.request,
+                                headers=decoded_headers,
+                                content=bytes(body),
+                            )
                             break
-                        location = response.headers.get("location")
-                        if not location:
-                            raise ValueError("CMS redirect response did not include a location")
-                        current_url = urljoin(str(response.url), location)
-                        self._validate_url(current_url, expected_host=expected_host)
                     else:
                         raise ValueError("CMS redirect limit exceeded")
-                    enforce_http_status(response)
                     self._validate_url(str(response.url), expected_host=expected_host)
-                    if len(response.content) > self.MAX_BYTES:
-                        raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response
                 except (SourceAccessDenied, SourceRateLimited, ValueError):
                     raise
@@ -241,6 +317,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             raise SourceAccessDenied(f"{branch.code}: robots.txt disallows {urlparse(url).path}")
 
     def _check_robots(self, robots_text: str, branch: EnforcementBranch, urls: list[str]) -> str:
+        if not re.search(r"^\s*User-agent\s*:", robots_text, re.IGNORECASE | re.MULTILINE):
+            raise SourceAccessDenied(f"{branch.code}: robots.txt lacks a User-agent directive")
         parser = RobotFileParser()
         parser.set_url(f"{branch.origin}/robots.txt")
         parser.parse(robots_text.splitlines())
@@ -282,6 +360,9 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 continue
             if parsed.path.startswith("/umbraco/surface/") or "/post" in parsed.path:
                 continue
+            if parsed.path.lower().endswith("normalnodelist"):
+                # A CMS navigation page contains links, not dated notice rows.
+                continue
             path = parsed.path.removesuffix("Lpsimplelist")
             canonical = urlunsplit(("https", branch.host, path, "", ""))
             ranked.append((priority, position, canonical))
@@ -310,14 +391,52 @@ class MojEnforcementCmsAdapter(SourceAdapter):
 
     @classmethod
     def _is_vehicle_auction_title(cls, title: str) -> bool:
-        normalized = clean(title)
+        normalized = cls.VEHICLE_FEE_BOILERPLATE_PATTERN.sub("", clean(title))
         return bool(cls.VEHICLE_PATTERN.search(normalized) and cls.AUCTION_PATTERN.search(normalized))
+
+    @classmethod
+    def _is_generic_auction_title(cls, title: str) -> bool:
+        normalized = clean(title)
+        return bool(
+            cls.AUCTION_PATTERN.search(normalized)
+            and not cls.VEHICLE_PATTERN.search(normalized)
+            and not cls.NON_VEHICLE_TITLE_PATTERN.search(normalized)
+        )
+
+    @classmethod
+    def _detail_explicitly_identifies_vehicle_auction(cls, content: bytes) -> bool:
+        soup = BeautifulSoup(content, "html.parser")
+        title_node = soup.select_one("meta[name='ContentTitle'], meta[name='DC.Title']")
+        title = clean(str(title_node.get("content") or "")) if title_node else ""
+        if not title:
+            heading = soup.select_one("h2.title")
+            title = clean(heading.get_text(" ", strip=True) if heading else "")
+        body_node = soup.select_one("section.cp")
+        body = clean(body_node.get_text(" ", strip=True) if body_node else "")
+        if not title or not body or not cls.AUCTION_PATTERN.search(title):
+            return False
+        if cls._is_vehicle_auction_title(title):
+            return True
+        # A generic auction title needs a vehicle in the advertised lot, not
+        # merely a tax/fee sentence such as 「欠繳汽車燃料使用費」.
+        body = cls.VEHICLE_FEE_BOILERPLATE_PATTERN.sub("", body)
+        for clause in re.split(r"[，,、。；;！？!?\n]", body):
+            if cls.EXCLUDED_LOT_CONTEXT_PATTERN.search(clause):
+                continue
+            if cls.VEHICLE_COUNT_PATTERN.search(clause):
+                return True
+            for mention in cls.VEHICLE_PATTERN.finditer(clause):
+                if cls.LOT_CONTEXT_PATTERN.search(clause[max(0, mention.start() - 18):mention.start()]):
+                    return True
+        return False
 
     @staticmethod
     def _page_url(list_url: str, page: int, page_size: int) -> str:
         parsed = urlsplit(list_url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query.update({"Page": str(page), "PageSize": str(page_size), "type": "01"})
+        # Preserve only official link filters. The invented `type=01` drops
+        # real announcements on current branch CMS lists.
+        query.update({"Page": str(page), "PageSize": str(page_size)})
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
 
     def _items_from_list(
@@ -328,13 +447,36 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         cutoff: datetime,
     ) -> tuple[list[DiscoveredItem], list[datetime], bool]:
         soup = BeautifulSoup(content, "html.parser")
+        table = soup.select_one("table.table_list")
+        empty_nodes = soup.select(", ".join(self.EMPTY_LIST_SELECTORS))
+        has_explicit_empty_marker = any(
+            self.EMPTY_LIST_PATTERN.search(clean(node.get_text(" ", strip=True)))
+            for node in empty_nodes
+        )
+        if table is None and not has_explicit_empty_marker:
+            link_only_nodes = soup.select("div.list li > a[href]")
+            if link_only_nodes and all(
+                urlparse(urljoin(discovery_url, str(node.get("href") or ""))).path
+                == "/umbraco/surface/Ini/CountAndRedirectUrl"
+                for node in link_only_nodes
+            ):
+                raise ValueError(
+                    f"{branch.code}: official auction page contained redirect links only; "
+                    "no dated CMS announcement rows were checked"
+                )
+            raise ValueError(
+                f"{branch.code}: unrecognized announcement list markup; "
+                "neither table_list nor an official empty marker was present"
+            )
         items: list[DiscoveredItem] = []
         dates: list[datetime] = []
+        recognized_rows = 0
         for row in soup.select("table.table_list tbody tr"):
             link = row.select_one("td[data-title='標題'] a[href]")
             date_cell = row.select_one("td[data-title*='日期'], td.date")
             if not link or not date_cell:
                 continue
+            recognized_rows += 1
             published_at = self._roc_date(date_cell.get_text(" ", strip=True))
             if not published_at:
                 self.discovery_warnings.append(
@@ -343,12 +485,14 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 continue
             dates.append(published_at)
             title = clean(link.get_text(" ", strip=True) or str(link.get("title") or ""))
-            if published_at < cutoff or not self._is_vehicle_auction_title(title):
+            explicit_vehicle = self._is_vehicle_auction_title(title)
+            generic_auction = self._is_generic_auction_title(title)
+            if published_at < cutoff or not (explicit_vehicle or generic_auction):
                 continue
             official_url = urljoin(discovery_url, str(link.get("href") or ""))
             parsed = urlparse(official_url)
             if parsed.scheme != "https" or parsed.hostname != branch.host or not parsed.path.endswith("/post"):
-                self.discovery_warnings.append(f"{branch.code}: skipped a vehicle row without a same-host HTML post")
+                self.discovery_warnings.append(f"{branch.code}: skipped an auction row without a same-host HTML post")
                 continue
             try:
                 self._require_robots_allowed(branch, official_url)
@@ -366,24 +510,46 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                     "organization": branch.organization,
                     "branch_code": branch.code,
                     "published_at": published_at.isoformat(),
-                    "discovery_method": "BRANCH_CMS_ANNOUNCEMENT_LIST",
+                    "discovery_method": (
+                        "BRANCH_CMS_ANNOUNCEMENT_LIST"
+                        if explicit_vehicle else "BRANCH_CMS_GENERIC_TITLE_PENDING_DETAIL"
+                    ),
+                    "requires_detail_vehicle_validation": generic_auction,
                 },
             ))
+        if not recognized_rows and not has_explicit_empty_marker:
+            raise ValueError(
+                f"{branch.code}: unrecognized announcement list rows; "
+                "expected official title/date cells or an official empty marker"
+            )
         has_next = bool(soup.select_one("ul.page a[title='下一頁']"))
         return items, dates, has_next
 
     async def _preflight(self, branch: EnforcementBranch) -> tuple[str, bytes]:
         robots_url = f"{branch.origin}/robots.txt"
-        robots = await self._request(robots_url, expected_host=branch.host)
-        self._require_mime(robots, {"text/plain", "text/html"}, "robots")
+        robots = await self._request(
+            robots_url,
+            expected_host=branch.host,
+            maximum_bytes=self.MAX_ROBOTS_BYTES,
+            robots_preflight=True,
+        )
+        self._require_mime(robots, {"text/plain"}, "robots")
         sitemap_url = self._check_robots(robots.text, branch, [branch.origin + "/"])
         self._require_robots_allowed(branch, sitemap_url)
-        sitemap = await self._request(sitemap_url, expected_host=branch.host, referer=robots_url)
+        sitemap = await self._request(
+            sitemap_url,
+            expected_host=branch.host,
+            referer=robots_url,
+            maximum_bytes=self.MAX_SITEMAP_BYTES,
+        )
         self._require_mime(sitemap, {"application/xml", "text/xml", "text/html"}, "sitemap")
         if len(sitemap.content) > self.MAX_SITEMAP_BYTES:
             raise ValueError(f"{branch.code}: sitemap exceeds {self.MAX_SITEMAP_BYTES} bytes")
         self._validate_sitemap(sitemap.content, branch)
-        homepage = await self._request(branch.origin + "/", expected_host=branch.host, referer=sitemap_url)
+        homepage = await self._request(
+            branch.origin + "/", expected_host=branch.host, referer=sitemap_url,
+            maximum_bytes=self.MAX_HTML_BYTES,
+        )
         self._require_mime(homepage, {"text/html"}, "homepage")
         self._check_robots(robots.text, branch, [sitemap_url, str(homepage.url)])
         return robots.text, homepage.content
@@ -394,6 +560,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         if not lists:
             raise ValueError(f"{branch.code}: no same-host announcement list was published on the homepage")
         found: dict[str, DiscoveredItem] = {}
+        generic_candidates: dict[str, DiscoveredItem] = {}
         checked_lists = 0
         for list_url in lists:
             try:
@@ -401,23 +568,70 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 for page in range(1, self.MAX_LIST_PAGES + 1):
                     page_url = self._page_url(list_url, page, self.PAGE_SIZE)
                     self._check_robots(robots_text, branch, [page_url])
-                    response = await self._request(page_url, expected_host=branch.host, referer=branch.origin + "/")
+                    response = await self._request(
+                        page_url, expected_host=branch.host, referer=branch.origin + "/",
+                        maximum_bytes=self.MAX_HTML_BYTES,
+                    )
                     self._require_mime(response, {"text/html"}, "announcement list")
                     items, dates, has_next = self._items_from_list(response.content, branch, list_url, cutoff)
                     for item in items:
-                        found[item.source_record_id] = item
+                        if item.metadata.get("requires_detail_vehicle_validation"):
+                            generic_candidates[item.source_record_id] = item
+                        else:
+                            found[item.source_record_id] = item
                     checked_lists += page == 1
                     if (dates and min(dates) < cutoff) or not has_next:
                         break
+                    if page == self.MAX_LIST_PAGES:
+                        self.discovery_warnings.append(
+                            f"{branch.code}: announcement list reached the {self.MAX_LIST_PAGES}-page "
+                            "safety bound while an official next page still existed; remaining pages were not checked"
+                        )
+            except (SourceAccessDenied, SourceRateLimited):
+                raise
             except Exception as exc:
                 self.discovery_warnings.append(f"{branch.code}: announcement list failed closed: {exc}")
         if not checked_lists:
             raise ValueError(f"{branch.code}: no announcement list could be checked")
+        candidates = list(generic_candidates.values())
+        if len(candidates) > self.MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH:
+            self.discovery_warnings.append(
+                f"{branch.code}: found {len(candidates)} generic auction titles; only the first "
+                f"{self.MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH} detail pages were checked"
+            )
+        for item in candidates[: self.MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH]:
+            try:
+                official_url = str(item.official_url)
+                self._require_robots_allowed(branch, official_url)
+                response = await self._request(
+                    official_url,
+                    expected_host=branch.host,
+                    referer=str(item.discovery_url),
+                    maximum_bytes=self.MAX_HTML_BYTES,
+                )
+                self._require_mime(response, {"text/html"}, "generic auction detail")
+                artifact = self._artifact(response, datetime.now(UTC))
+                if not self._detail_explicitly_identifies_vehicle_auction(artifact.content):
+                    continue
+                item.metadata.pop("requires_detail_vehicle_validation", None)
+                item.metadata["discovery_method"] = "BRANCH_CMS_GENERIC_TITLE_DETAIL_VALIDATED"
+                if self._cached_detail_bytes + len(artifact.content) <= self.MAX_CACHED_DETAIL_BYTES:
+                    self._detail_artifacts[item.source_record_id] = artifact
+                    self._cached_detail_bytes += len(artifact.content)
+                found[item.source_record_id] = item
+            except (SourceAccessDenied, SourceRateLimited):
+                raise
+            except Exception as exc:
+                self.discovery_warnings.append(
+                    f"{branch.code}: generic auction detail {item.source_record_id} failed closed: {exc}"
+                )
         return list(found.values())
 
     async def discover(self) -> list[DiscoveredItem]:
         self.discovery_warnings = []
         self._robots_by_host.clear()
+        self._detail_artifacts.clear()
+        self._cached_detail_bytes = 0
         now = self._now()
         if now.tzinfo is None:
             now = now.replace(tzinfo=TAIPEI)
@@ -475,13 +689,21 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         if not urlparse(official_url).path.endswith("/post"):
             raise ValueError("Administrative Enforcement CMS items must use an official HTML post URL")
         fetched_at = datetime.now(UTC)
-        primary = await self._request(official_url, expected_host=host, referer=str(item.discovery_url))
-        self._require_mime(primary, {"text/html"}, "detail")
-        artifacts = [self._artifact(primary, fetched_at)]
-        soup = BeautifulSoup(primary.content, "html.parser")
+        primary_artifact = self._detail_artifacts.get(item.source_record_id)
+        if primary_artifact is not None and str(primary_artifact.official_url) != official_url:
+            raise ValueError("Cached CMS detail does not match the discovered official URL")
+        if primary_artifact is None:
+            primary = await self._request(
+                official_url, expected_host=host, referer=str(item.discovery_url),
+                maximum_bytes=self.MAX_HTML_BYTES,
+            )
+            self._require_mime(primary, {"text/html"}, "detail")
+            primary_artifact = self._artifact(primary, fetched_at)
+        artifacts = [primary_artifact]
+        soup = BeautifulSoup(primary_artifact.content, "html.parser")
         attachment_urls: list[str] = []
         for node in soup.select(".file_download a[href]"):
-            url = urljoin(str(primary.url), str(node.get("href") or ""))
+            url = urljoin(str(primary_artifact.official_url), str(node.get("href") or ""))
             parsed = urlparse(url)
             label = clean(f"{node.get('title', '')} {node.get_text(' ', strip=True)}").lower()
             is_pdf = parsed.path.lower().endswith(".pdf") or ".pdf" in label

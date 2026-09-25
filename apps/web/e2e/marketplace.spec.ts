@@ -68,7 +68,7 @@ test("judicial no-photo records use an explicit text state instead of a generic 
 });
 
 test("no-photo marketplace cards stay compact and keep the deadline in the auction facts", async ({ page }) => {
-  await page.goto("/motorcycles?view=active");
+  await page.goto("/motorcycles?view=all&source=judicial");
   await expect(page.getByPlaceholder("例如：品牌、重型機車、車牌、法院機關")).toBeVisible();
   const card = page.locator(".moto-card.no-official-photo").filter({ hasText: "TEST-COURT-04" });
   const notice = card.locator(".photo-absence-card");
@@ -80,7 +80,7 @@ test("no-photo marketplace cards stay compact and keep the deadline in the aucti
 });
 
 test("identified judicial vehicles can be favorited from the card and appear in favorites", async ({ page }) => {
-  await page.goto("/motorcycles?view=active&source=judicial");
+  await page.goto("/motorcycles?view=all&source=judicial");
   const card = page.locator(".moto-card").filter({ hasText: "TEST-COURT-04" });
   const favorite = card.getByRole("button", { name: "加入收藏" });
   await expect(favorite).toBeVisible();
@@ -96,7 +96,7 @@ test("nationwide source and disposal-origin filters are bookmarkable", async ({ 
   await expect(page.getByRole("link", { name: "花蓮地院報廢機車標售批次", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("資料來源")).toHaveValue("pcc");
   await expect(page.getByLabel("處分性質")).toHaveValue("IMPOUNDED_UNCLAIMED");
-  await page.goto("/motorcycles?source=judicial&origin=JUDICIAL_EXECUTION");
+  await page.goto("/motorcycles?view=all&source=judicial&origin=JUDICIAL_EXECUTION");
   await expect(page.getByRole("link", { name: "KYMCO SJ25HE", exact: true })).toBeVisible();
   await expect(page.locator(".moto-card").filter({ hasText: "KYMCO SJ25HE" }).getByText("司法院 22 地院動產法拍")).toBeVisible();
   await expect(page.getByLabel("資料來源")).toHaveValue("judicial");
