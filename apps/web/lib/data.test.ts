@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { decodeMarketplaceCursor, deriveRiskBadges, encodeMarketplaceCursor, groupSignedPhotoUrls, mapOfficialDocument, matchesFilters } from "./data";
+import {
+  collectFavoriteListingIds,
+  decodeMarketplaceCursor,
+  displacementBandDatabaseClause,
+  displacementFacetCountsForItems,
+  deriveRiskBadges,
+  encodeMarketplaceCursor,
+  groupSignedPhotoUrls,
+  isDatabaseListingFavorite,
+  mapOfficialDocument,
+  mapSnapshotHistory,
+  matchesFilters,
+} from "./data";
 import { fixtureMotorcycles } from "./fixtures";
 
 describe("marketplace filters", () => {
@@ -32,6 +44,12 @@ describe("marketplace filters", () => {
     expect(matchesFilters(fixtureMotorcycles[3]!, { marketView: "scrap" })).toBe(true);
     expect(matchesFilters(fixtureMotorcycles[0]!, { marketView: "scrap" })).toBe(false);
   });
+
+  it("keeps a favorited scrap record discoverable from My Favorites", () => {
+    const favoriteScrap = { ...fixtureMotorcycles[3]!, favorite: true };
+    expect(matchesFilters(favoriteScrap, { marketView: "favorites" })).toBe(true);
+    expect(matchesFilters({ ...favoriteScrap, favorite: false }, { marketView: "favorites" })).toBe(false);
+  });
   it("filters official motorcycle class without inferring unknown bulk lots", () => {
     expect(matchesFilters(fixtureMotorcycles[5]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(true);
     expect(matchesFilters(fixtureMotorcycles[1]!, { vehicleClass: "ORDINARY_HEAVY" })).toBe(false);
@@ -49,6 +67,40 @@ describe("marketplace filters", () => {
     const unknownDisplacement = fixtureMotorcycles.find((item) => item.displacementCc === null);
     expect(unknownDisplacement).toBeDefined();
     expect(matchesFilters(unknownDisplacement!, { displacementBands: ["UNKNOWN"] })).toBe(true);
+  });
+  it("counts every fixed CC band under all other filters while ignoring the selected CC", () => {
+    const base = fixtureMotorcycles[5]!;
+    const candidates = [125, 126, 150, 151, 250, 251, 550, 551, null, 0].map((displacementCc, index) => ({
+      ...base,
+      id: `cc-boundary-${index}`,
+      displacementCc,
+      county: "高雄市",
+    }));
+    const distractor = { ...base, id: "other-source", displacementCc: 125, county: "高雄市", source: "shwoo" };
+    const carDistractor = { ...base, id: "car-displacement", displacementCc: 125, county: "高雄市", vehicleType: "CAR" as const, carCategory: "PASSENGER" as const, vehicleClass: "UNKNOWN" as const };
+
+    expect(displacementFacetCountsForItems([...candidates, distractor, carDistractor], {
+      marketView: "all",
+      source: "judicial",
+      county: "高雄市",
+      eligibility: "UNKNOWN",
+      displacementBands: ["LE_125"],
+    })).toEqual({
+      LE_125: 1,
+      CC_126_150: 2,
+      CC_151_250: 2,
+      CC_251_550: 2,
+      GT_550: 1,
+      UNKNOWN: 1,
+    });
+  });
+  it("uses database predicates that match the same non-overlapping boundaries", () => {
+    expect(displacementBandDatabaseClause("LE_125")).toBe("and(displacement_cc.gt.0,displacement_cc.lte.125)");
+    expect(displacementBandDatabaseClause("CC_126_150")).toBe("and(displacement_cc.gte.126,displacement_cc.lte.150)");
+    expect(displacementBandDatabaseClause("CC_151_250")).toBe("and(displacement_cc.gte.151,displacement_cc.lte.250)");
+    expect(displacementBandDatabaseClause("CC_251_550")).toBe("and(displacement_cc.gte.251,displacement_cc.lte.550)");
+    expect(displacementBandDatabaseClause("GT_550")).toBe("displacement_cc.gt.550");
+    expect(displacementBandDatabaseClause("UNKNOWN")).toBe("displacement_cc.is.null");
   });
   it("excludes unknown auction dates from a future deadline filter", () => {
     const unknownDate = { ...fixtureMotorcycles[0]!, auctionAt: null };
@@ -83,6 +135,24 @@ describe("marketplace cursor", () => {
   it("rejects malformed and oversized cursors", () => {
     expect(decodeMarketplaceCursor("not-a-cursor")).toBeNull();
     expect(decodeMarketplaceCursor("x".repeat(513))).toBeNull();
+  });
+
+  it("rejects well-formed cursors with unsafe semantic values", () => {
+    const unsafeId = Buffer.from(JSON.stringify({ version: 1, sort: "auction_asc", value: "2026-09-01T00:00:00Z", id: "id),auction_at.gt.0" })).toString("base64url");
+    const invalidDate = Buffer.from(JSON.stringify({ version: 1, sort: "auction_asc", value: "not-a-date", id: "fixture-safe" })).toString("base64url");
+    const invalidPrice = Buffer.from(JSON.stringify({ version: 1, sort: "price_asc", value: -1, id: "fixture-safe" })).toString("base64url");
+    expect(decodeMarketplaceCursor(unsafeId)).toBeNull();
+    expect(decodeMarketplaceCursor(invalidDate)).toBeNull();
+    expect(decodeMarketplaceCursor(invalidPrice)).toBeNull();
+  });
+});
+
+describe("car fixtures", () => {
+  it("supports car-category filtering without treating a car as a motorcycle", () => {
+    const passenger = fixtureMotorcycles.find((item) => item.id === "fixture-car-passenger");
+    expect(passenger).toMatchObject({ vehicleType: "CAR", carCategory: "PASSENGER", vehicleClass: "UNKNOWN" });
+    expect(matchesFilters(passenger!, { marketView: "all", vehicleType: "CAR", carCategory: "PASSENGER" })).toBe(true);
+    expect(matchesFilters(passenger!, { marketView: "all", vehicleType: "MOTORCYCLE" })).toBe(false);
   });
 });
 
@@ -119,5 +189,45 @@ describe("official document links", () => {
       url: "https://court.example.gov.tw/notice.pdf",
       cached: true,
     });
+  });
+});
+
+describe("vehicle and lot favorites", () => {
+  it("resolves both direct vehicle favorites and stable owning-lot favorites", () => {
+    const favorites = collectFavoriteListingIds([
+      { vehicle_id: "vehicle-1", lot_id: null },
+      { vehicle_id: null, lot_id: "lot-2" },
+    ]);
+
+    expect(isDatabaseListingFavorite({ id: "vehicle-1", lot_id: "lot-1" }, favorites)).toBe(true);
+    expect(isDatabaseListingFavorite({ id: "lot-2", lot_id: "lot-2" }, favorites)).toBe(true);
+    expect(isDatabaseListingFavorite({ id: "vehicle-2", lot_id: "lot-2" }, favorites)).toBe(true);
+    expect(isDatabaseListingFavorite({ id: "vehicle-3", lot_id: "lot-3" }, favorites)).toBe(false);
+  });
+});
+
+describe("immutable snapshot history", () => {
+  it("maps lot and vehicle history without requiring a vehicle observation", () => {
+    expect(mapSnapshotHistory([
+      {
+        observed_at: "2026-08-20T08:00:00Z",
+        normalized_payload: {
+          auction_round: 2,
+          reserve_price: 18_000,
+          current_price: null,
+          sold_price: null,
+          status: "SCHEDULED",
+        },
+      },
+    ])).toEqual([
+      {
+        observedAt: "2026-08-20T08:00:00Z",
+        round: 2,
+        reservePrice: 18_000,
+        currentPrice: null,
+        soldPrice: null,
+        status: "SCHEDULED",
+      },
+    ]);
   });
 });

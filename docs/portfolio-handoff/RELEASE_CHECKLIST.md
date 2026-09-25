@@ -2,7 +2,7 @@
 
 公開正式案件頁：`PUBLIC_LIVE_MARKETPLACE`
 
-完整私人 ingestion：`CONFIGURATION_REQUIRED`
+正式資料覆蓋：`DEGRADED / PARTIAL`（2026-09-25 查核；詳見 [部署文件](../deployment.md#production-audit-2026-09-25)）
 
 - [x] 正式網址可載入公開案件資料
 - [x] 預設顯示進行中案件，已截止案件不誤列為進行中
@@ -16,8 +16,11 @@
 - [x] 法院 PDF 只連回官方來源，不保存公開副本
 - [x] 找車頁已移除流程宣言、廣告預留及重複免責文字
 - [x] 正式頁部署後無瀏覽器錯誤
-- [ ] `SUPABASE_SECRET_KEY`（或舊版 `SUPABASE_SERVICE_ROLE_KEY`）已設定於排程環境
+- [x] `SUPABASE_SECRET_KEY` 已設定於 GitHub Actions；2026-09-25 的 MOJ／PCC／Customs job 已使用它成功執行
 - [ ] Supabase migration、seed 與 pgTAP 已在正式相容環境完整驗證
-- [ ] 尚未授權或需要 CAPTCHA 的來源已取得可自動化依據
+- [x] 需要 CAPTCHA 或尚未授權的來源未排入無人自動化；它們仍是覆蓋缺口
+- [ ] 行政執行署分署排程連續成功，且至少有一筆正式來源健康紀錄可核對
+- [ ] 臺北惜物網與司法來源的更新頻率已恢復或在頁面標示為過期／人工來源
+- [ ] `public_source_health` migration 已套用且匿名只讀邊界已驗證
 
-最後驗證：2026 年 8 月 15 日；正式頁已通過案件載入、本機收藏與公開詳細頁 smoke test；Cloudflare Worker version `915d2627-76c6-4d34-8fb2-8ee6bf5f5dfe`。
+最後遠端資料／排程查核：2026 年 9 月 25 日；公開頁 HTTP 200，匿名列表 117 筆，但不代表 117 筆目前可投標。最近 10 次整體排程失敗，原因集中在分署 CMS；本次修改尚未完成正式同步與瀏覽器驗收。

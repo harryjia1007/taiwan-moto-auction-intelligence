@@ -1,5 +1,10 @@
+-- LOCAL DEVELOPMENT / TEST ONLY.
+-- Supabase CLI replays this file for local reset and CI fixture tests. Never
+-- run it against a linked hosted project: the production source registry is
+-- bootstrapped by migration 202608230008 and this file contains a placeholder
+-- owner plus fully synthetic records.
 insert into app_settings (id, owner_email) values (true, 'owner@example.com')
-on conflict (id) do update set owner_email = excluded.owner_email;
+on conflict (id) do nothing;
 
 insert into organizations (id, canonical_name, organization_type, jurisdiction, official_domain)
 values ('10000000-0000-0000-0000-000000000001', '臺北市動產質借處', 'GOVERNMENT_AGENCY', '臺灣', 'shwoo.gov.taipei')
@@ -63,7 +68,7 @@ insert into source_access_policies
 values
   ('20000000-0000-0000-0000-000000000001','ALLOW','https://shwoo.gov.taipei/robots.txt','https://shwoo.gov.taipei/shwoo/newhome/newhome00/index','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-15','/shwoo/ application path is allowed; public redistribution is not enabled'),
   ('20000000-0000-0000-0000-000000000002','MANUAL_ONLY','https://aomp109.judicial.gov.tw/robots.txt','https://www.judicial.gov.tw/tw/cp-1327-84674-d8e05-1.html','OGL_V1_WITH_EXCEPTIONS','HIGH','2026-08-15','Central query automation is disallowed. Human-reviewed official PDF manifests may be imported without querying or mirroring the blocked site; former dataset 49107 was permanently withdrawn and unattended discovery awaits a replacement official feed'),
-  ('20000000-0000-0000-0000-000000000003','MANUAL_ONLY','https://www.tpkonsale.moj.gov.tw/','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-15','Human CAPTCHA discovery only; validated detail manifests may be processed'),
+  ('20000000-0000-0000-0000-000000000003','MANUAL_ONLY','https://www.tpkonsale.moj.gov.tw/robots.txt','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','LINK_ONLY_NO_FETCH','HIGH','2026-08-21','The official search form requires CAPTCHA. Direct result GET behavior is not used; offline human-exported result HTML or validated same-host detail manifests may be processed'),
   ('20000000-0000-0000-0000-000000000004','ALLOW','https://web.pcc.gov.tw/robots.txt','https://data.gov.tw/license','PRIVATE_CACHE_ONLY','MEDIUM','2026-08-18','ALLOW is based on official machine-readable dataset 7263 under OGDL 1.0, not an ambiguous robots response; detail matching stays on web.pcc.gov.tw HTTPS'),
   ('20000000-0000-0000-0000-000000000005','ALLOW','https://auction.moj.gov.tw/robots.txt','https://www.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=70586','PRIVATE_CACHE_ONLY','HIGH','2026-08-18','ALLOW is limited to auction.moj.gov.tw. Unreviewed prosecutor-office redirect targets are not contacted; exact central list-row evidence is retained as a partial record'),
   ('20000000-0000-0000-0000-000000000007','ALLOW','https://web.customs.gov.tw/robots.txt','https://web.customs.gov.tw/singlehtml/694','LINK_ONLY_NO_FETCH','MEDIUM','2026-08-19','Four Customs HTML announcement channels are allowed; /download/ attachments remain official outbound links and are never fetched or mirrored'),
@@ -78,8 +83,8 @@ insert into source_endpoints (source_id, endpoint_type, url, notes) values
 ('20000000-0000-0000-0000-000000000001','RESULTS','https://shwoo.gov.taipei/shwoo/newproduct/newproduct00/bidresult','公開近期待決標/決標查詢'),
 ('20000000-0000-0000-0000-000000000002','DISCOVERY','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/V2.htm','22 個地院中央動產拍賣公開查詢'),
 ('20000000-0000-0000-0000-000000000002','DETAIL','https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02/DO_VIEWPDF.htm','法院拍賣公告 PDF'),
-('20000000-0000-0000-0000-000000000003','DISCOVERY','https://www.tpkonsale.moj.gov.tw/Chattel','人工完成 CAPTCHA 後匯出官方案件明細 URL'),
-('20000000-0000-0000-0000-000000000003','DETAIL','https://www.tpkonsale.moj.gov.tw/Detail/Chattel','官方動產案件明細、公告與照片'),
+('20000000-0000-0000-0000-000000000003','DISCOVERY','https://www.tpkonsale.moj.gov.tw/Chattel','人工完成 CAPTCHA 後儲存官方結果 HTML 或匯出案件明細 URL；程式不請求 Query'),
+('20000000-0000-0000-0000-000000000003','DETAIL','https://www.tpkonsale.moj.gov.tw/Detail/Chattel','經驗證的官方動產案件明細；PDF 只連官方全文，圖片不擷取'),
 ('20000000-0000-0000-0000-000000000004','DISCOVERY','https://web.pcc.gov.tw/opas/aspam/public/downloadOpenData','資料集 7263 財物變賣公告 XML；上班日每日更新'),
 ('20000000-0000-0000-0000-000000000004','DETAIL','https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld','公開財物變賣明細'),
 ('20000000-0000-0000-0000-000000000005','DISCOVERY','https://auction.moj.gov.tw/1724/1726/searchList','法務部查扣物汽機車類公開清單'),
@@ -103,6 +108,18 @@ insert into source_endpoints (source_id, endpoint_type, url, notes) values
 ('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.hly.moj.gov.tw/','花蓮分署官方 CMS；每次由 robots 與 sitemap 驗證入口'),
 ('20000000-0000-0000-0000-000000000008','DISCOVERY','https://www.ily.moj.gov.tw/','宜蘭分署官方 CMS；每次由 robots 與 sitemap 驗證入口')
 on conflict do nothing;
+
+-- These aomp109 rows are retained only as provenance/manual-reference URLs.
+-- The central Judicial adapter validates a human-reviewed manifest locally
+-- and must perform zero requests to either endpoint.
+update source_endpoints
+set enabled = false,
+    notes = case endpoint_type
+      when 'DISCOVERY' then '人工參考：中央查詢禁止程式連線；只能匯入人工核對的官方清單'
+      else '人工參考：只驗證人工清單中的官方 PDF 網址；程式不下載或鏡像 PDF'
+    end
+where source_id = '20000000-0000-0000-0000-000000000002'
+  and url like 'https://aomp109.judicial.gov.tw/%';
 
 insert into vehicle_brands (id, canonical_name, aliases) values
 ('30000000-0000-0000-0000-000000000001','SYM',array['SYM','三陽','三陽牌','三陽工業','SANYANG']),

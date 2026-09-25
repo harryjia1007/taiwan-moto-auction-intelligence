@@ -2,7 +2,7 @@
 
 Official source: <https://shwoo.gov.taipei/shwoo/browse/browse00/>
 
-The adapter obtains a persistent session from the public browse page and submits keyword searches for both unrestricted and recycler-only listings. It separately submits the official completed-result form because its AUID links and titles are server-rendered only after POST. AUIDs are deduplicated before the adapter fetches detail HTML and official images, then parses normalized fields with exact evidence text.
+The adapter freshly loads and validates `https://shwoo.gov.taipei/robots.txt` at the start of every discovery, then obtains a persistent session from the public browse page and submits keyword searches for both unrestricted and recycler-only listings. A verified policy is cached only for that operation; a failed refresh never reuses a prior allow result. The adapter separately submits the official completed-result form because its AUID links and titles are server-rendered only after POST. Every redirect target remains exact-host HTTPS and must pass the loaded robots policy before contact. AUIDs are deduplicated before the adapter fetches detail HTML and official images, then parses normalized fields with exact evidence text.
 
 Every official image URL discovered in the detail HTML is fetched before parsing, checksum-addressed in the private artifact bucket, and linked to the listing in source order. The artifact retains the URL written in the official HTML even when the image endpoint redirects; this keeps parsed photo references connected to their cached bytes. Reprocessing may update order and last-seen time but never clears an existing artifact/checksum/storage path merely because an offline reprocess has no image bytes.
 
@@ -18,6 +18,8 @@ python -m ingest reprocess --source shwoo --from-parser-version 1.0.0
 ```
 
 `reprocess` reads checksum-addressed private artifacts and never performs a live source request. A zero-result or failed live run preserves all prior records and is surfaced through source health warnings.
+
+Auction status is derived only from explicit official outcome text and a parsed deadline. A current listing whose deadline is missing remains `ANNOUNCED` (date unknown), not `SCHEDULED`; a disappeared page is never interpreted as sold.
 
 `publish-public-shwoo` is the hosted scheduler path. It uses server-only Supabase credentials, writes official HTML/images to the private checksum-addressed bucket, retains private normalized snapshots, and updates the backward-compatible `public_live_motorcycle_listings` table with explicit `vehicle_type` and `car_category` fields. The public projection includes only partially masked plates for 30 days after auction end; the final two or three characters are hidden. It excludes people, phone numbers, complete plates, engine/frame/VIN identifiers, evidence text, cached artifact paths, and service credentials. Mixed car/motorcycle lots remain bulk listings and do not inherit one vehicle's specifications as another's.
 

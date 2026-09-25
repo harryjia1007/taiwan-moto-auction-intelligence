@@ -1,14 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Heart } from "lucide-react";
 
-export function FavoriteButton({ id, initial, variant = "overlay" }: { id: string; initial: boolean; variant?: "overlay" | "inline" }) {
+export function FavoriteButton({ id, initial, variant = "overlay" }: { id: string; initial: boolean; variant?: "overlay" | "inline" | "compact" }) {
   const router = useRouter();
   const [favorite, setFavorite] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(""), 3_000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
   async function toggle() {
     if (busy) return;
     const next = !favorite;
@@ -27,10 +32,10 @@ export function FavoriteButton({ id, initial, variant = "overlay" }: { id: strin
     }
   }
   return <>
-    <button type="button" className={`favorite ${variant === "inline" ? "favorite-inline" : ""}`} aria-label={favorite ? "移除收藏" : "加入收藏"} aria-pressed={favorite} aria-busy={busy} onClick={toggle} disabled={busy}>
+    <button type="button" className={`favorite ${variant === "inline" ? "favorite-inline" : variant === "compact" ? "favorite-compact" : ""}`} aria-label={favorite ? "移除收藏" : "加入收藏"} aria-pressed={favorite} aria-busy={busy} onClick={toggle} disabled={busy}>
       <Heart size={18} fill={favorite ? "currentColor" : "none"} />
       {variant === "inline" && <span>{busy ? "更新中" : favorite ? "已收藏" : "加入收藏"}</span>}
     </button>
-    <span className="sr-only" role="status" aria-live="polite">{message}</span>
+    {message && <span className={`interaction-toast ${message.includes("失敗") ? "error" : ""}`} role="status" aria-live="polite">{message}</span>}
   </>;
 }

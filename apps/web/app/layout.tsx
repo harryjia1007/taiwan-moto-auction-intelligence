@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { headers } from "next/headers";
-import { Bike, Database, Heart, LogOut, Search } from "lucide-react";
+import { Database, Gauge, Heart, LogOut, Search } from "lucide-react";
 import { getViewer } from "@/lib/auth";
 import "./globals.css";
 
-export const metadata: Metadata = { title: "臺灣機車拍賣情報", description: "可信、可追溯的臺灣政府機車拍賣情報", robots: { index: false, follow: false } };
+export const metadata: Metadata = { title: "臺灣汽機車拍賣情報", description: "可信、可追溯的臺灣政府汽機車拍賣情報", robots: { index: false, follow: false } };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const publicSurface = (await headers()).get("x-tm-public-surface") === "1";
   const viewer = publicSurface ? null : await getViewer();
   return <html lang="zh-TW"><body>
     {viewer && <header className="app-header"><div className="container header-inner">
-      <Link href="/motorcycles?view=active" className="brand" aria-label="臺灣機車拍賣情報首頁">
-        <span className="brand-mark"><Bike size={19} /></span>
-        <span className="brand-copy"><small>臺灣官方標售情報</small><strong>機車拍賣情報</strong></span>
+      <Link href="/motorcycles?view=active" className="brand" aria-label="臺灣汽機車拍賣情報首頁">
+        <span className="brand-mark"><Gauge size={19} /></span>
+        <span className="brand-copy"><small>臺灣官方標售情報</small><strong>汽機車拍賣情報</strong></span>
       </Link>
       <div className="header-actions">
         <span className="private-status"><i/> 私人情報台</span>

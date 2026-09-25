@@ -6,6 +6,7 @@ import pytest
 from ingest.adapters.pcc import PccAssetSaleAdapter
 
 FIXTURES = Path(__file__).parent / "fixtures"
+ROBOTS = b"User-agent: *\nAllow: /\n"
 
 
 def test_open_data_discovers_vehicle_notices_and_excludes_railway_locomotives() -> None:
@@ -46,6 +47,8 @@ async def test_discovery_uses_one_official_open_data_request() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         return httpx.Response(200, content=feed, headers={"content-type": "application/octet-stream"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
@@ -53,7 +56,7 @@ async def test_discovery_uses_one_official_open_data_request() -> None:
         items = await adapter.discover()
 
     assert len(items) == 3
-    assert requested == [PccAssetSaleAdapter.OPEN_DATA_URL]
+    assert requested == [PccAssetSaleAdapter.ROBOTS_URL, PccAssetSaleAdapter.OPEN_DATA_URL]
 
 
 @pytest.mark.asyncio
@@ -64,6 +67,8 @@ async def test_fetch_resolves_exact_feed_row_to_https_detail() -> None:
     item = PccAssetSaleAdapter._open_data_items(feed, PccAssetSaleAdapter.OPEN_DATA_URL)[0]
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path.endswith("/readAspam"):
             assert request.url.params["searchTenderCaseNo"] == "SYNTH-PCC-01"
             assert request.url.params["searchOrgName"] == "合成司法機關"
@@ -89,6 +94,8 @@ async def test_fetch_fails_closed_when_feed_row_cannot_be_matched() -> None:
     search = (FIXTURES / "pcc_search.html").read_bytes()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         return httpx.Response(200, content=search, headers={"content-type": "text/html"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
@@ -100,6 +107,8 @@ async def test_fetch_fails_closed_when_feed_row_cannot_be_matched() -> None:
 @pytest.mark.asyncio
 async def test_discovery_rejects_non_xml_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         return httpx.Response(200, content=b"<html>error</html>", headers={"content-type": "text/html"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
@@ -122,6 +131,8 @@ async def test_cross_host_redirect_is_rejected_before_contact() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         contacted.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         return httpx.Response(302, headers={"location": "https://example.com/pcc-feed.xml"})
 
     async with httpx.AsyncClient(
@@ -132,7 +143,7 @@ async def test_cross_host_redirect_is_rejected_before_contact() -> None:
         with pytest.raises(ValueError, match="Blocked non-registered source URL"):
             await adapter.discover()
 
-    assert contacted == [PccAssetSaleAdapter.OPEN_DATA_URL]
+    assert contacted == [PccAssetSaleAdapter.ROBOTS_URL, PccAssetSaleAdapter.OPEN_DATA_URL]
 
 
 @pytest.mark.asyncio
@@ -142,6 +153,8 @@ async def test_same_host_https_redirect_is_followed_with_validation() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         contacted.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path.endswith("downloadOpenData"):
             return httpx.Response(302, headers={"location": "/opas/aspam/public/feed.xml"})
         return httpx.Response(200, content=feed, headers={"content-type": "application/xml"})
@@ -152,6 +165,7 @@ async def test_same_host_https_redirect_is_followed_with_validation() -> None:
 
     assert len(items) == 3
     assert contacted == [
+        PccAssetSaleAdapter.ROBOTS_URL,
         PccAssetSaleAdapter.OPEN_DATA_URL,
         "https://web.pcc.gov.tw/opas/aspam/public/feed.xml",
     ]

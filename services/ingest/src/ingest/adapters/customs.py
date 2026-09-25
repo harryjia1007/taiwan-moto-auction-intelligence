@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from ingest.adapters.base import (
+    LiveRobotsPolicy,
     SourceAccessDenied,
     SourceAdapter,
     SourceRateLimited,
@@ -34,6 +35,7 @@ from ingest.models import (
     VehicleIdentifier,
     VehicleType,
 )
+from ingest.official_documents import validated_official_document_url
 from ingest.parser import (
     car_category_from_official_text,
     clean,
@@ -55,6 +57,7 @@ class CustomsAuctionAdapter(SourceAdapter):
     """
 
     ORIGIN = "https://web.customs.gov.tw"
+    ROBOTS_URL = f"{ORIGIN}/robots.txt"
     OVERVIEW_URL = f"{ORIGIN}/singlehtml/1207?cntId=cus1_93228_1207"
     OFFICE_LISTS = {
         "keelung": ("財政部關務署基隆關", f"{ORIGIN}/keelung/multiplehtml/572"),
@@ -66,7 +69,7 @@ class CustomsAuctionAdapter(SourceAdapter):
     BLOCKED_PATH_PREFIXES = ("/download/",)
     MAX_BYTES = 5 * 1024 * 1024
     MAX_LIST_PAGES_PER_OFFICE = 5
-    MAX_CANDIDATES_PER_PAGE = 20
+    MAX_CANDIDATES_PER_PAGE = 100
     MAX_REDIRECTS = 5
     VEHICLE_TERMS = (
         "機車",
@@ -94,10 +97,11 @@ class CustomsAuctionAdapter(SourceAdapter):
         overview_url: str | None = None,
         office_lists: dict[str, tuple[str, str]] | None = None,
     ) -> None:
+        user_agent = contact_user_agent("0.6")
         self.client = client or httpx.AsyncClient(
             follow_redirects=False,
             timeout=httpx.Timeout(25),
-            headers={"User-Agent": contact_user_agent("0.5")},
+            headers={"User-Agent": user_agent},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
@@ -107,6 +111,11 @@ class CustomsAuctionAdapter(SourceAdapter):
         self._request_lock = asyncio.Lock()
         self._detail_artifacts: dict[str, RawArtifact] = {}
         self._discovery_warnings: list[str] = []
+        self._robots = LiveRobotsPolicy(
+            self.ROBOTS_URL,
+            allowed_host="web.customs.gov.tw",
+            user_agent=user_agent,
+        )
 
     async def close(self) -> None:
         if self._owns_client:
@@ -128,6 +137,7 @@ class CustomsAuctionAdapter(SourceAdapter):
 
     async def _request(self, url: str) -> httpx.Response:
         self._validate_url(url)
+        await self._robots.ensure_allowed(self.client, url)
         last_error: Exception | None = None
         for attempt in range(3):
             async with self._request_lock:
@@ -146,10 +156,12 @@ class CustomsAuctionAdapter(SourceAdapter):
                             raise ValueError("Customs redirect response did not include a location")
                         current_url = urljoin(str(response.url), location)
                         self._validate_url(current_url)
+                        self._robots.require_allowed(current_url)
                     else:
                         raise ValueError("Customs redirect limit exceeded")
                     enforce_http_status(response)
                     self._validate_url(str(response.url))
+                    self._robots.require_allowed(str(response.url))
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     content_type = response.headers.get("content-type", "").lower()
@@ -291,11 +303,13 @@ class CustomsAuctionAdapter(SourceAdapter):
         return typed != VehicleType.UNKNOWN or cls._generic_vehicle_evidence(text) is not None
 
     async def discover(self) -> list[DiscoveredItem]:
+        self._robots.reset()
         self._detail_artifacts.clear()
         self._discovery_warnings.clear()
         overview = await self._request(self.overview_url)
         if "海關私貨拍賣" not in overview.text or not all(name in overview.text for name in ("基隆關", "臺北關", "臺中關", "高雄關")):
             raise ValueError("Customs auction overview structure changed")
+        overview_artifact = self._artifact(overview)
 
         candidates: dict[str, DiscoveredItem] = {}
         for office_slug, (organization, seed_url) in self.office_lists.items():
@@ -309,6 +323,13 @@ class CustomsAuctionAdapter(SourceAdapter):
                 response = await self._request(page_url)
                 if "標售" not in response.text:
                     raise ValueError(f"Customs auction list structure changed for {office_slug}")
+                list_artifact = self._artifact(response)
+                rows = BeautifulSoup(response.content, "html.parser").select("table tbody tr")
+                if len(rows) > self.MAX_CANDIDATES_PER_PAGE:
+                    self._discovery_warnings.append(
+                        f"{office_slug}: one auction page contained {len(rows)} rows; only the first "
+                        f"{self.MAX_CANDIDATES_PER_PAGE} were checked"
+                    )
                 for item in self._listing_candidates(
                     response.content,
                     office_slug=office_slug,
@@ -316,10 +337,15 @@ class CustomsAuctionAdapter(SourceAdapter):
                     list_url=seed_url,
                     current_url=str(response.url),
                 ):
+                    item.discovery_artifacts = [list_artifact, overview_artifact]
                     candidates[item.source_record_id] = item
                 for target in self._list_page_urls(response.content, str(response.url), seed_url):
                     if target not in seen and target not in queue:
                         queue.append(target)
+            if queue:
+                self._discovery_warnings.append(
+                    f"{office_slug}: auction list reached the {self.MAX_LIST_PAGES_PER_OFFICE}-page safety bound while official pages remained"
+                )
 
         found: dict[str, DiscoveredItem] = {}
         for item in candidates.values():
@@ -340,12 +366,12 @@ class CustomsAuctionAdapter(SourceAdapter):
     async def fetch(self, item: DiscoveredItem) -> list[RawArtifact]:
         cached = self._detail_artifacts.get(item.source_record_id)
         if cached:
-            return [cached]
+            return [cached, *item.discovery_artifacts]
         response = await self._request(str(item.official_url))
         artifact = self._artifact(response)
         if not self._is_vehicle_notice(item, artifact.content):
             raise ValueError("Customs notice does not explicitly identify a vehicle in allowed HTML")
-        return [artifact]
+        return [artifact, *item.discovery_artifacts]
 
     @staticmethod
     def _sentence(text: str, pattern: str) -> str | None:
@@ -368,7 +394,7 @@ class CustomsAuctionAdapter(SourceAdapter):
             parsed = urlparse(target)
             if parsed.scheme != "https" or parsed.hostname != "web.customs.gov.tw":
                 continue
-            if not unquote(parsed.path).lower().startswith("/download/") or target in seen:
+            if validated_official_document_url("customs", target) is None or target in seen:
                 continue
             seen.add(target)
             label = clean(link.get_text(" ", strip=True)) or "官方附件"
@@ -377,7 +403,7 @@ class CustomsAuctionAdapter(SourceAdapter):
                     field_name="official_attachment_url",
                     normalized_value=target,
                     source_text=label,
-                    extraction_method="HTML_LINK",
+                    extraction_method="HTML",
                     trust="OFFICIAL_EXPLICIT",
                 )
             )
@@ -476,10 +502,54 @@ class CustomsAuctionAdapter(SourceAdapter):
         else:
             eligibility = BidEligibility.UNKNOWN
 
-        evidence: list[EvidenceRef] = [
-            EvidenceRef(field_name="title", normalized_value=item.title, source_text=item.title),
-            EvidenceRef(field_name="organization", normalized_value=organization, source_text=organization),
-        ]
+        list_artifact = next(
+            (
+                artifact
+                for artifact in artifacts[1:]
+                if "/multiplehtml/" in urlparse(str(artifact.official_url)).path
+                and item.title in clean(BeautifulSoup(artifact.content, "html.parser").get_text(" ", strip=True))
+            ),
+            None,
+        )
+        organization_token = organization.removeprefix("財政部關務署")
+        overview_artifact = next(
+            (
+                artifact
+                for artifact in artifacts[1:]
+                if urlparse(str(artifact.official_url)).path == "/singlehtml/1207"
+                and organization_token in clean(BeautifulSoup(artifact.content, "html.parser").get_text(" ", strip=True))
+            ),
+            None,
+        )
+        evidence: list[EvidenceRef] = []
+        if list_artifact is not None:
+            evidence.append(EvidenceRef(
+                field_name="title",
+                normalized_value=item.title,
+                source_text=item.title,
+                artifact_checksum_sha256=list_artifact.checksum_sha256,
+            ))
+        elif item.title.encode("utf-8") in html.content:
+            evidence.append(EvidenceRef(
+                field_name="title",
+                normalized_value=item.title,
+                source_text=item.title,
+                artifact_checksum_sha256=html.checksum_sha256,
+            ))
+        if overview_artifact is not None:
+            evidence.append(EvidenceRef(
+                field_name="organization",
+                normalized_value=organization,
+                source_text=organization_token,
+                artifact_checksum_sha256=overview_artifact.checksum_sha256,
+            ))
+        elif organization.encode("utf-8") in html.content:
+            evidence.append(EvidenceRef(
+                field_name="organization",
+                normalized_value=organization,
+                source_text=organization,
+                artifact_checksum_sha256=html.checksum_sha256,
+            ))
         for field_name, normalized, source in (
             ("official_case_number", case_number, case_sentence),
             ("ends_at", auction_at.isoformat() if auction_at else None, auction_sentence),
@@ -550,6 +620,7 @@ class CustomsAuctionAdapter(SourceAdapter):
         started = time.monotonic()
         warnings: list[str] = []
         try:
+            self._robots.reset()
             overview = await self._request(self.overview_url)
             if "海關私貨拍賣" not in overview.text:
                 warnings.append("四關總覽的預期標記不存在")

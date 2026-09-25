@@ -7,6 +7,7 @@ from ingest.adapters.shwoo import ShwooAdapter
 from ingest.models import DiscoveredItem
 
 FIXTURES = Path(__file__).parent / "fixtures"
+ROBOTS = b"User-agent: *\nAllow: /\n"
 
 
 @pytest.mark.asyncio
@@ -15,6 +16,8 @@ async def test_discovery_deduplicates_keyword_and_eligibility_results() -> None:
     results = '<a href="/shwoo/newproduct/newproduct00/product?AUID=939528">機器腳踏車1台</a>'
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path.endswith("browse00/"):
             return httpx.Response(200, content=browse, headers={"content-type": "text/html"})
         if request.url.path.endswith("advancedQuery"):
@@ -38,6 +41,8 @@ async def test_discovery_keeps_other_keyword_results_after_one_timeout() -> None
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal advanced_calls
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path.endswith("browse00/"):
             return httpx.Response(200, content=browse, headers={"content-type": "text/html"})
         if request.url.path.endswith("advancedQuery"):
@@ -73,6 +78,8 @@ async def test_broken_image_does_not_discard_detail_html() -> None:
     detail = (FIXTURES / "shwoo_single.html").read_bytes()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if "imageResize" in str(request.url):
             return httpx.Response(404)
         return httpx.Response(200, content=detail, headers={"content-type": "text/html"})
@@ -93,6 +100,8 @@ async def test_redirected_image_keeps_the_url_parsed_from_official_html() -> Non
     detail = (FIXTURES / "shwoo_single.html").read_bytes()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if "imageResize" in str(request.url):
             return httpx.Response(302, headers={"location": "/shwoo/cached/final.jpg"})
         if request.url.path.endswith("final.jpg"):
@@ -118,3 +127,18 @@ async def test_unregistered_host_is_blocked() -> None:
     with pytest.raises(ValueError, match="Blocked"):
         await adapter._request("GET", "https://example.com/")
     await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_never_emits_an_empty_timeout_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = ShwooAdapter(request_interval=0)
+
+    async def timeout(*args: object, **kwargs: object) -> httpx.Response:
+        raise TimeoutError
+
+    monkeypatch.setattr(adapter, "_request", timeout)
+    health = await adapter.healthcheck()
+    await adapter.close()
+
+    assert health.status == "DEGRADED"
+    assert health.warnings == ["TimeoutError"]

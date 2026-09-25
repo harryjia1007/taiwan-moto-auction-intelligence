@@ -1,18 +1,16 @@
 import Link from "next/link";
-import { Archive, ArrowRight, CalendarRange, Heart, Search, ShieldCheck, TimerReset } from "lucide-react";
-import type { MotorcycleFilters } from "@tm-ai/shared";
+import { Archive, ArrowLeft, ArrowRight, CalendarRange, Heart, Search, ShieldCheck, TimerReset } from "lucide-react";
 import { requireViewer } from "@/lib/auth";
-import { listMotorcycles } from "@/lib/data";
+import { decodeMarketplaceCursor, listMotorcycles } from "@/lib/data";
 import { FilterPanel } from "@/components/filter-panel";
 import { MotorcycleCard } from "@/components/motorcycle-card";
-import { pageParamsToSearchParams, parseMarketplaceQuery, sanitizedMarketplaceQuery, type PageSearchParams } from "@/lib/marketplace-query";
+import { ComparisonProvider } from "@/components/comparison-provider";
+import { marketplaceViewHref, pageParamsToSearchParams, parseMarketplaceQuery, sanitizedMarketplaceQuery, type PageSearchParams } from "@/lib/marketplace-query";
 
-function tabHref(params: PageSearchParams, view: NonNullable<MotorcycleFilters["marketView"]>, within?: number) {
-  const query = sanitizedMarketplaceQuery(pageParamsToSearchParams(params));
-  query.delete("cursor");
-  query.set("view", view);
-  if (view === "ended" || within === undefined) query.delete("within");
-  if (within !== undefined) query.set("within", String(within));
+function paginationHref(filters: URLSearchParams, cursor: string | null, limit: number) {
+  const query = new URLSearchParams(filters);
+  if (limit !== 24) query.set("limit", String(limit));
+  if (cursor) query.set("cursor", cursor); else query.delete("cursor");
   return `/motorcycles?${query.toString()}`;
 }
 
@@ -36,8 +34,10 @@ export default async function MotorcyclesPage({ searchParams }: { searchParams: 
   const viewer = await requireViewer();
   const params = await searchParams;
   const rawQuery = pageParamsToSearchParams(params);
-  const { filters } = parseMarketplaceQuery(rawQuery);
-  const { items, total } = await listMotorcycles(filters, viewer);
+  const { filters, limit, cursor } = parseMarketplaceQuery(rawQuery);
+  const decodedCursor = decodeMarketplaceCursor(cursor);
+  const currentCursor = decodedCursor?.sort === (filters.sort ?? "auction_asc") ? cursor : null;
+  const { items, total, nextCursor, displacementFacetCounts } = await listMotorcycles(filters, viewer, limit, currentCursor);
   const cleanQuery = sanitizedMarketplaceQuery(rawQuery);
   const view = filters.marketView ?? "active";
   const copy = viewCopy[view];
@@ -50,15 +50,26 @@ export default async function MotorcyclesPage({ searchParams }: { searchParams: 
       </div>
     </section>
     <nav className="market-tabs" aria-label="拍賣案件狀態">
-      <Link className={view === "active" && filters.auctionWithinDays !== 30 ? "active" : ""} href={tabHref(params,"active")}><Search size={17}/><span><strong>找進行中</strong><small>仍可參與</small></span></Link>
-      <Link className={view === "active" && filters.auctionWithinDays === 30 ? "active" : ""} href={tabHref(params,"active",30)}><CalendarRange size={17}/><span><strong>30 天內</strong><small>近期拍賣</small></span></Link>
-      <Link className={view === "ended" ? "active" : ""} href={tabHref(params,"ended")}><Archive size={17}/><span><strong>看歷史</strong><small>截止不等於成交</small></span></Link>
-      <Link className={view === "favorites" ? "active" : ""} href={tabHref(params,"favorites")}><Heart size={17}/><span><strong>我的收藏</strong><small>候選車輛</small></span></Link>
-      <Link className={`scrap-tab ${view === "scrap" ? "active" : ""}`} href={tabHref(params,"scrap")}><Archive size={17}/><span><strong>報廢／回收</strong><small>與一般找車分開</small></span></Link>
+      <Link className={view === "active" && filters.auctionWithinDays !== 30 ? "active" : ""} href={marketplaceViewHref(rawQuery,"active")}><Search size={17}/><span><strong>找進行中</strong><small>仍可參與</small></span></Link>
+      <Link className={view === "active" && filters.auctionWithinDays === 30 ? "active" : ""} href={marketplaceViewHref(rawQuery,"active",30)}><CalendarRange size={17}/><span><strong>30 天內</strong><small>近期拍賣</small></span></Link>
+      <Link className={view === "ended" ? "active" : ""} href={marketplaceViewHref(rawQuery,"ended")}><Archive size={17}/><span><strong>看歷史</strong><small>截止不等於成交</small></span></Link>
+      <Link className={view === "favorites" ? "active" : ""} href={marketplaceViewHref(rawQuery,"favorites")}><Heart size={17}/><span><strong>我的收藏</strong><small>候選車輛</small></span></Link>
+      <Link className={`scrap-tab ${view === "scrap" ? "active" : ""}`} href={marketplaceViewHref(rawQuery,"scrap")}><Archive size={17}/><span><strong>報廢／回收</strong><small>與一般找車分開</small></span></Link>
     </nav>
-    <FilterPanel queryString={cleanQuery.toString()} total={total} />
+    <FilterPanel queryString={cleanQuery.toString()} total={total} displacementFacetCounts={displacementFacetCounts} />
     <div className="result-bar"><div><span className="result-kicker">搜尋結果</span><strong>{copy.title}</strong><span>{total} 筆符合條件</span></div><span className="result-note">{sortCopy[filters.sort ?? "auction_asc"]} · 截止不等於成交</span></div>
-    {items.length ? <section className="grid" aria-label="汽機車拍賣結果">{items.map((item)=><MotorcycleCard key={item.id} motorcycle={item} />)}</section> : <section className="empty"><h2>{copy.empty}</h2><p className="muted">可以清除部分篩選條件，或查看其他案件狀態。新的官方資料會在後續同步後出現。</p><Link className="button" href={`/motorcycles?view=${view}`}>清除篩選</Link></section>}
+    <ComparisonProvider>
+      {items.length ? <section className="grid" aria-label="汽機車拍賣結果">{items.map((item)=><MotorcycleCard key={item.id} motorcycle={item} />)}</section> : <section className="empty"><h2>{copy.empty}</h2><p className="muted">可以清除部分篩選條件，或查看其他案件狀態。新的官方資料會在後續同步後出現。</p><Link className="button" href={`/motorcycles?view=${view}`}>清除篩選</Link></section>}
+    </ComparisonProvider>
+    {(currentCursor || nextCursor) && <nav className="cursor-pagination" aria-label="搜尋結果分頁">
+      <div><strong>本頁顯示 {items.length} 筆</strong><span>完整條件共有 {total} 筆；分頁網址可收藏或返回。</span></div>
+      <div>
+        {currentCursor && <Link href={paginationHref(cleanQuery, null, limit)}><ArrowLeft size={15}/> 回第一頁</Link>}
+        {nextCursor
+          ? <Link className="button" href={paginationHref(cleanQuery, nextCursor, limit)}>下一批結果 <ArrowRight size={15}/></Link>
+          : <span>已到最後一頁</span>}
+      </div>
+    </nav>}
     {items.length > 0 && <div className="market-end"><span>所有資料都應以投標當下的官方公告為準</span><Link href="/sources">查看來源健康狀態 <ArrowRight size={15}/></Link></div>}
   </div></main>;
 }

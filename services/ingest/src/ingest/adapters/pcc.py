@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.adapters.base import SourceAdapter, contact_user_agent, enforce_http_status
+from ingest.adapters.base import LiveRobotsPolicy, SourceAdapter, contact_user_agent, enforce_http_status
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SourceHealth
 from ingest.parser import parse_pcc_detail
 
@@ -24,6 +24,7 @@ class PccAssetSaleAdapter(SourceAdapter):
     BASE_URL = "https://web.pcc.gov.tw"
     OPEN_DATA_URL = f"{BASE_URL}/opas/aspam/public/downloadOpenData"
     SEARCH_URL = f"{BASE_URL}/opas/aspam/public/readAspam"
+    ROBOTS_URL = f"{BASE_URL}/robots.txt"
     DATASET_URL = "https://data.gov.tw/dataset/7263"
     ALLOWED_HOSTS = {"web.pcc.gov.tw"}
     VEHICLE_TERMS = ("汽車", "機車", "車輛")
@@ -37,15 +38,21 @@ class PccAssetSaleAdapter(SourceAdapter):
     FEED_MIME_TYPES = {"application/octet-stream", "application/xml", "text/xml"}
 
     def __init__(self, client: httpx.AsyncClient | None = None, request_interval: float = 1.0) -> None:
+        user_agent = contact_user_agent("0.6")
         self.client = client or httpx.AsyncClient(
             follow_redirects=False,
             timeout=httpx.Timeout(20),
-            headers={"User-Agent": contact_user_agent("0.5")},
+            headers={"User-Agent": user_agent},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
         self._last_request = 0.0
         self._request_lock = asyncio.Lock()
+        self._robots = LiveRobotsPolicy(
+            self.ROBOTS_URL,
+            allowed_host="web.pcc.gov.tw",
+            user_agent=user_agent,
+        )
 
     async def close(self) -> None:
         if self._owns_client:
@@ -68,6 +75,7 @@ class PccAssetSaleAdapter(SourceAdapter):
 
     async def _request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
         self._validate_url(url)
+        await self._robots.ensure_allowed(self.client, url)
         last_error: Exception | None = None
         for attempt in range(3):
             async with self._request_lock:
@@ -93,11 +101,13 @@ class PccAssetSaleAdapter(SourceAdapter):
                             raise ValueError("PCC redirect response did not include a location")
                         current_url = urljoin(str(response.url), location)
                         self._validate_url(current_url)
+                        self._robots.require_allowed(current_url)
                         request_kwargs.pop("params", None)
                     else:
                         raise ValueError("PCC redirect limit exceeded")
                     enforce_http_status(response)
                     self._validate_url(str(response.url))
+                    self._robots.require_allowed(str(response.url))
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response
@@ -228,6 +238,7 @@ class PccAssetSaleAdapter(SourceAdapter):
             raise ValueError("PCC open-data response is not XML")
 
     async def discover(self) -> list[DiscoveredItem]:
+        self._robots.reset()
         response = await self._request("GET", self.OPEN_DATA_URL)
         self._validate_open_data_response(response)
         return self._open_data_items(response.content, str(response.url))
@@ -281,6 +292,7 @@ class PccAssetSaleAdapter(SourceAdapter):
     async def healthcheck(self) -> SourceHealth:
         started = time.monotonic()
         try:
+            self._robots.reset()
             response = await self._request("GET", self.OPEN_DATA_URL)
             self._validate_open_data_response(response)
             root = ET.fromstring(response.content)
