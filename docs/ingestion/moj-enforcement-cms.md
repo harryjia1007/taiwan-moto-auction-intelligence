@@ -13,10 +13,10 @@
 1. 讀取官方 `robots.txt`，若官方回應同站 HTTPS `/robots` 導向，僅在這個 robots preflight 特例追蹤並取得其中宣告的同站 HTTPS sitemap；其他導向目標仍須先受已驗證的 robots 規則允許。
 2. 驗證 sitemap 是有效 XML，且至少包含一個同站 HTTPS 網址。sitemap 只用於來源與邊界驗證，不把過期的 `lastmod` 當成目前公告日期。
 3. 從分署首頁既有連結找「動產拍賣公告」、「拍賣品消息」、「電子公布欄」或「最新消息」清單；排除只有導覽連結的 `Normalnodelist`，不猜測節點編號，也不掃描未知路徑。清單分頁只加 `Page`／`PageSize`，不自行加入可能過濾掉公告的 `type` 參數。
-4. 每站最多讀兩個清單、每個清單最多兩頁、每頁 30 筆，只處理最近 90 天的公告。標題明確含拍賣及車輛語意者納入；泛稱「動產拍賣」者每分署最多檢查 12 個同站官方明細，只有明細本文明確提及車輛才納入。純不動產標題不列入泛稱候選。只有跳轉連結而無日期公告列、無法辨識的新版清單都回報缺口，不當成零筆。
-5. 只接受同一分署 HTTPS `/post` 內容頁。泛稱公告在發現時取得的 HTML 會供後續解析使用，不重複請求。可保存同站官方 PDF 附件；不抓 CMS 圖片，也不把頁面中的圖片網址發布成照片。
+4. 每站最多讀兩個清單、每個清單最多兩頁、每頁 30 筆，只處理最近 90 天的公告。標題明確含拍賣及車輛語意者納入；泛稱「動產拍賣」者每分署最多檢查 12 個同站官方明細，只有明細在拍賣標的脈絡明確提及車輛才納入，單獨提到汽車燃料費或牌照稅不算。純不動產標題不列入泛稱候選。只有跳轉連結而無日期公告列、無法辨識的新版清單都回報缺口，不當成零筆。
+5. 只接受同一分署 HTTPS `/post` 內容頁。泛稱公告在發現時取得的 HTML 會在 8 MiB 全次快取預算內供後續解析使用；超出快取預算時於正式 fetch 重新讀取，並先保存官方 artifact 再解析。可保存同站官方 PDF 附件；不抓 CMS 圖片，也不把頁面中的圖片網址發布成照片。
 
-所有請求共用每秒最多一次的節流、25 MiB 單檔限制、robots 256 KiB 與 sitemap 8 MiB 的更小上限、有限重試、官方 host allowlist、MIME 驗證及可聯絡 User-Agent。請求宣告 `Accept-Encoding: identity`，以避開部分 CMS 不正常的壓縮回應；仍逐塊限制實際讀取大小。每個分署各自保存本次 robots 規則，sitemap、清單、內容頁與 PDF 都在連線前逐一檢查；被禁止的內容頁不連線，被禁止的 PDF 只保留同站官方外連而不下載。artifact metadata 只保留 Content-Type、Content-Length、Content-Disposition、Cache-Control、ETag 與 Last-Modified 等安全 response headers；Set-Cookie、Authorization 與任意識別性 header 不入庫。預設單次請求 12 秒、最多 2 次嘗試、每分署 45 秒硬性上限，並可用 `MOJ_ENFORCEMENT_CMS_REQUEST_TIMEOUT_SECONDS`、`MOJ_ENFORCEMENT_CMS_MAX_REQUEST_ATTEMPTS` 與 `MOJ_ENFORCEMENT_CMS_BRANCH_DEADLINE_SECONDS` 調整。因此單一分署失聯只會留下警告，不會讓 13 站工作無限等待。PDF 只作私人證據 artifact，前端應連回官方內容頁；未經另外授權，不對外鏡像附件。
+所有請求共用每秒最多一次的節流、PDF 25 MiB、HTML 1 MiB、robots 256 KiB 與 sitemap 8 MiB 的回應上限、有限重試、官方 host allowlist、MIME 驗證及可聯絡 User-Agent。請求宣告 `Accept-Encoding: identity`，以避開部分 CMS 不正常的壓縮回應；若站方仍回傳壓縮內容，實際解碼後逐塊檢查上限，且不對已解碼內容重複解碼。每個分署各自保存本次 robots 規則，sitemap、清單、內容頁與 PDF 都在連線前逐一檢查；被禁止的內容頁不連線，被禁止的 PDF 只保留同站官方外連而不下載。artifact metadata 只保留 Content-Type、Content-Length、Content-Disposition、Cache-Control、ETag 與 Last-Modified 等安全 response headers；Set-Cookie、Authorization 與任意識別性 header 不入庫。預設單次請求 12 秒、最多 2 次嘗試、每分署 45 秒硬性上限，並可用 `MOJ_ENFORCEMENT_CMS_REQUEST_TIMEOUT_SECONDS`、`MOJ_ENFORCEMENT_CMS_MAX_REQUEST_ATTEMPTS` 與 `MOJ_ENFORCEMENT_CMS_BRANCH_DEADLINE_SECONDS` 調整。因此單一分署失聯只會留下警告，不會讓 13 站工作無限等待。PDF 只作私人證據 artifact，前端應連回官方內容頁；未經另外授權，不對外鏡像附件。
 
 ## 正規化原則
 

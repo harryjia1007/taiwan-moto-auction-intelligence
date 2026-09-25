@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,7 +56,10 @@ def test_cms_link_only_and_unrecognized_layouts_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generic_auction_title_requires_explicit_vehicle_detail_and_reuses_artifact() -> None:
+@pytest.mark.parametrize(("cache_bytes", "expected_fetches"), [(8 * 1024 * 1024, 1), (1, 2)])
+async def test_generic_auction_title_requires_explicit_vehicle_detail_and_reuses_artifact(
+    cache_bytes: int, expected_fetches: int,
+) -> None:
     contacted: list[str] = []
     list_html = """<table class='table_list'><tbody>
       <tr><td data-title='標題'><a href='/notice/1767001/post'>動產拍賣公告</a></td>
@@ -83,6 +87,7 @@ async def test_generic_auction_title_requires_explicit_vehicle_detail_and_reuses
             branches=(BRANCH,), client=client, request_interval=0,
             now=lambda: datetime(2026, 8, 18, tzinfo=TAIPEI),
         )
+        adapter.MAX_CACHED_DETAIL_BYTES = cache_bytes
         items = await adapter.discover()
         assert [item.source_record_id for item in items] == ["tcy-1767001"]
         assert items[0].metadata["discovery_method"] == "BRANCH_CMS_GENERIC_TITLE_DETAIL_VALIDATED"
@@ -91,7 +96,7 @@ async def test_generic_auction_title_requires_explicit_vehicle_detail_and_reuses
 
     assert parsed.vehicle_type == "MOTORCYCLE"
     assert [identifier.original_value for identifier in parsed.identifiers] == ["KSS-7890"]
-    assert contacted.count(f"{BRANCH.origin}/notice/1767001/post") == 1
+    assert contacted.count(f"{BRANCH.origin}/notice/1767001/post") == expected_fetches
     assert contacted.count(f"{BRANCH.origin}/notice/1767002/post") == 1
 
 
@@ -181,6 +186,45 @@ async def test_robots_redirect_is_narrow_and_requests_identity_encoding() -> Non
     assert items
     assert contacted[:2] == [f"{BRANCH.origin}/robots.txt", f"{BRANCH.origin}/robots"]
     assert set(encodings) == {"identity"}
+
+
+@pytest.mark.asyncio
+async def test_cms_decodes_valid_gzip_once_even_when_server_ignores_identity() -> None:
+    html = b"<html><body>fixture</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(
+            200, content=gzip.compress(html),
+            headers={"content-type": "text/html", "content-encoding": "gzip"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojEnforcementCmsAdapter(branches=(BRANCH,), client=client, request_interval=0)
+        response = await adapter._request(f"{BRANCH.origin}/fixture/post", expected_host=BRANCH.host)
+
+    assert response.content == html
+    assert "content-encoding" not in response.headers
+    assert response.headers["content-length"] == str(len(html))
+
+
+@pytest.mark.asyncio
+async def test_cms_html_response_limit_rejects_oversized_generic_detail() -> None:
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        contacted.append(str(request.url))
+        return httpx.Response(200, content=b"x" * 65, headers={"content-type": "text/html"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojEnforcementCmsAdapter(branches=(BRANCH,), client=client, request_interval=0)
+        with pytest.raises(ValueError, match="exceeds 64 bytes"):
+            await adapter._request(
+                f"{BRANCH.origin}/notice/1767001/post", expected_host=BRANCH.host,
+                maximum_bytes=64,
+            )
+
+    assert contacted == [f"{BRANCH.origin}/notice/1767001/post"]
 
 
 @pytest.mark.asyncio
@@ -424,6 +468,20 @@ def test_vehicle_filter_requires_both_auction_and_vehicle_language() -> None:
     assert MojEnforcementCmsAdapter._is_vehicle_auction_title("第8次車輛及其他動產拍賣")
     assert not MojEnforcementCmsAdapter._is_vehicle_auction_title("機車報廢便民服務")
     assert not MojEnforcementCmsAdapter._is_vehicle_auction_title("珠寶及名錶拍賣")
+    assert not MojEnforcementCmsAdapter._is_vehicle_auction_title("汽車燃料使用費拍賣")
+
+
+def test_generic_auction_detail_does_not_treat_vehicle_tax_as_a_lot() -> None:
+    jewelry_only = """<html><head><meta name='ContentTitle' content='動產拍賣公告'></head>
+      <body><section class='cp'>本次標的為金飾及珠寶。債務人欠繳汽車燃料使用費，請先繳清。</section></body></html>""".encode()
+    other_case_vehicle = """<html><head><meta name='ContentTitle' content='動產拍賣公告'></head>
+      <body><section class='cp'>本次拍賣標的為金飾及珠寶，債務人名下汽車另案處理。</section></body></html>""".encode()
+    vehicle_lot = """<html><head><meta name='ContentTitle' content='動產拍賣公告'></head>
+      <body><section class='cp'>本次標的為普通重型機車一輛。拍定後須繳汽車燃料使用費。</section></body></html>""".encode()
+
+    assert not MojEnforcementCmsAdapter._detail_explicitly_identifies_vehicle_auction(jewelry_only)
+    assert not MojEnforcementCmsAdapter._detail_explicitly_identifies_vehicle_auction(other_case_vehicle)
+    assert MojEnforcementCmsAdapter._detail_explicitly_identifies_vehicle_auction(vehicle_lot)
 
 
 def test_cms_artifact_headers_exclude_cookie_and_authorization_metadata() -> None:

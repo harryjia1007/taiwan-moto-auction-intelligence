@@ -13,6 +13,16 @@ from ingest.models import ParsedAuctionRecord, VehicleClass, VehicleType
 _PLATE_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]{1,4}[-－–—][A-Za-z0-9]{1,4})(?![A-Za-z0-9])"
 )
+_NUMERIC_PLATE_PATTERN = re.compile(r"(?<![A-Za-z0-9])\d{3,4}[-－–—]\d{3,4}(?![A-Za-z0-9])")
+_COMPACT_PLATE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{3,4}|\d{3,4}[A-Za-z]{1,4})(?![A-Za-z0-9])"
+)
+_LABELED_PLATE_PATTERN = re.compile(
+    r"(?:車牌(?:號碼|號)?|牌照(?:號碼|號)?|車號)\s*(?:[:：=]|為)?\s*"
+    r"(?P<plate>[A-Za-z0-9]{2,4}[-－–—][A-Za-z0-9]{2,4}|[A-Za-z0-9]{5,8})"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 _VIN_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Za-z0-9])", re.IGNORECASE)
 _LABELED_VEHICLE_IDENTIFIER_PATTERN = re.compile(
     r"((?:引擎|車身|車架|VIN)(?:號碼|號|碼)?\s*[:：]?\s*)[A-Za-z0-9-]{5,}",
@@ -92,11 +102,33 @@ def _record_identifiers(record: ParsedAuctionRecord) -> list[tuple[str, str]]:
     return list(dict.fromkeys(values))
 
 
-def _known_identifier_replacements(identifiers: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def _unparsed_labeled_plates(record: ParsedAuctionRecord) -> list[tuple[str, str]]:
+    """Treat official plate-labelled tokens as private even if a parser missed them."""
+    fields = (
+        record.official_title, record.title, record.official_case_number,
+        record.organization, record.location, record.description,
+        record.brand, record.model, record.color, *record.fee_notes,
+    )
+    return list(dict.fromkeys(
+        ("POSSIBLE_PLATE", match.group("plate"))
+        for field in fields if field
+        for match in _LABELED_PLATE_PATTERN.finditer(field)
+    ))
+
+
+def _known_identifier_replacements(
+    identifiers: list[tuple[str, str]], *, show_masked_plates: bool,
+) -> list[tuple[str, str]]:
     replacements: list[tuple[str, str]] = []
     for identifier_type, value in identifiers:
-        replacement = mask_public_plate(value) if identifier_type == "PLATE" else "車輛識別碼已隱藏"
-        replacements.append((value, replacement or "車牌已隱藏"))
+        if identifier_type == "PLATE":
+            replacement = mask_public_plate(value) if show_masked_plates else None
+            replacement = replacement or "已隱藏"
+        elif identifier_type == "POSSIBLE_PLATE":
+            replacement = "已隱藏"
+        else:
+            replacement = "車輛識別碼已隱藏"
+        replacements.append((value, replacement))
     return sorted(dict.fromkeys(replacements), key=lambda item: len(item[0]), reverse=True)
 
 
@@ -104,22 +136,32 @@ def _contains_unparsed_plate(value: str) -> bool:
     """Catch plausible plates that were absent from a source parser's identifiers.
 
     This is a public-output safety net, not evidence that the token is a plate.
-    Dates alone are left intact; ambiguous letter-and-digit tokens are withheld.
+    Short month/day dates are left intact; longer ambiguous tokens in URLs or
+    source IDs are withheld even if they might be non-plate identifiers.
     """
-    return any(
+    decoded = unquote(value)
+    return bool(
+        _NUMERIC_PLATE_PATTERN.search(decoded)
+        or _COMPACT_PLATE_PATTERN.search(decoded)
+    ) or any(
         re.search(r"[A-Za-z]", match.group(0)) and re.search(r"\d", match.group(0))
-        for match in _PLATE_TOKEN_PATTERN.finditer(unquote(value))
+        for match in _PLATE_TOKEN_PATTERN.finditer(decoded)
     )
 
 
-def _mask_unparsed_plate_token(match: re.Match[str]) -> str:
+def _mask_unparsed_plate_token(match: re.Match[str], *, show_masked_plates: bool) -> str:
     token = match.group(0)
     if not _contains_unparsed_plate(token):
         return token
-    return mask_public_plate(token) or "車牌已隱藏"
+    return (mask_public_plate(token) if show_masked_plates else None) or "已隱藏"
 
 
-def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]) -> str | None:
+def _sanitize_public_text(
+    value: str | None,
+    replacements: list[tuple[str, str]],
+    *,
+    show_masked_plates: bool = True,
+) -> str | None:
     if value is None:
         return None
     sanitized = value
@@ -132,13 +174,16 @@ def _sanitize_public_text(value: str | None, replacements: list[tuple[str, str]]
             sanitized,
             flags=re.IGNORECASE,
         )
-    sanitized = _PLATE_TOKEN_PATTERN.sub(_mask_unparsed_plate_token, sanitized)
     sanitized = _VIN_PATTERN.sub("車身識別碼已隱藏", sanitized)
     sanitized = _LABELED_VEHICLE_IDENTIFIER_PATTERN.sub(r"\1已隱藏", sanitized)
     sanitized = _PHONE_PATTERN.sub("聯絡電話已隱藏", sanitized)
     sanitized = _EMAIL_PATTERN.sub("聯絡信箱已隱藏", sanitized)
     sanitized = _TAIWAN_ID_PATTERN.sub("身分證字號已隱去", sanitized)
     sanitized = _PERSON_ROLE_PATTERN.sub(lambda match: f"{match.group('role')}：已隱去", sanitized)
+    sanitized = _PLATE_TOKEN_PATTERN.sub(
+        lambda match: _mask_unparsed_plate_token(match, show_masked_plates=show_masked_plates),
+        sanitized,
+    )
     return sanitized
 
 
@@ -267,8 +312,10 @@ def public_listing_payload(
     # Keep a plate for at most 30 days after the official end time, then clear it
     # from the public projection even though the private evidence is retained.
     plate_public = record.ends_at is not None and record.ends_at >= now - timedelta(days=30)
-    identifiers = _record_identifiers(record)
-    replacements = _known_identifier_replacements(identifiers)
+    identifiers = list(dict.fromkeys([*_record_identifiers(record), *_unparsed_labeled_plates(record)]))
+    replacements = _known_identifier_replacements(identifiers, show_masked_plates=plate_public)
+    def public_text(value: str | None) -> str | None:
+        return _sanitize_public_text(value, replacements, show_masked_plates=plate_public)
     plate_values = [
         entry.original_value
         for entry in record.identifiers
@@ -318,12 +365,12 @@ def public_listing_payload(
     payload: dict[str, Any] = {
         "id": f"{source_adapter}-{public_source_record_id}",
         "source_adapter": source_adapter,
-        "source_name": _sanitize_public_text(source_name, replacements) or "官方拍賣來源",
+        "source_name": public_text(source_name) or "官方拍賣來源",
         "source_record_id": public_source_record_id,
         "official_url": _sanitize_official_url(str(record.official_url), identifiers),
-        "official_title": _sanitize_public_text(record.official_title, replacements) or "車輛拍賣公告",
-        "official_case_number": _sanitize_public_text(record.official_case_number, replacements),
-        "organization_name": _sanitize_public_text(record.organization, replacements) or source_name,
+        "official_title": public_text(record.official_title) or "車輛拍賣公告",
+        "official_case_number": public_text(record.official_case_number),
+        "organization_name": public_text(record.organization) or public_text(source_name) or "官方拍賣來源",
         "disposal_origin": record.disposal_origin,
         "auction_status": record.status.value,
         "auction_round": record.auction_round,
@@ -338,24 +385,24 @@ def public_listing_payload(
         "vehicle_type": public_vehicle_type,
         "vehicle_category": "UNKNOWN" if mixed_vehicle_lot else record.vehicle_class.value,
         "car_category": "UNKNOWN" if mixed_vehicle_lot else record.car_category.value,
-        "brand_name": None if mixed_vehicle_lot else _sanitize_public_text(record.brand, replacements),
-        "model_name": None if mixed_vehicle_lot else _sanitize_public_text(record.model, replacements),
+        "brand_name": None if mixed_vehicle_lot else public_text(record.brand),
+        "model_name": None if mixed_vehicle_lot else public_text(record.model),
         "manufacture_year": record.manufacture_year,
         "manufacture_month": record.manufacture_month,
         "displacement_cc": None if mixed_vehicle_lot else record.displacement_cc,
-        "color": _sanitize_public_text(record.color, replacements),
+        "color": public_text(record.color),
         "mileage_km": record.mileage_km,
         "plate_number": "、".join(plates) if plate_public and plates else None,
         "has_key": record.has_key.value,
         "can_start": record.can_start.value,
         "can_test": record.can_test.value,
-        "location": _sanitize_public_text(record.location, replacements),
+        "location": public_text(record.location),
         "description": None,
         "condition_summary": public_condition,
         "fee_notes": [
             sanitized
             for note in record.fee_notes
-            if (sanitized := _sanitize_public_text(note, replacements))
+            if (sanitized := public_text(note))
         ],
         "lot_size": record.lot_size,
         "bulk_lot": record.bulk_lot or mixed_vehicle_lot,

@@ -53,6 +53,15 @@ def test_public_feed_never_publishes_plate_without_a_verified_end_time():
     assert public_listing_payload(record(ends_at=None))["plate_number"] is None
 
 
+def test_public_feed_suppresses_known_plate_in_text_without_a_verified_end_time():
+    item = record(ends_at=None, official_title="普通重型機車，車牌 ABC-123")
+    payload = public_listing_payload(item)
+
+    assert payload["plate_number"] is None
+    assert payload["official_title"] == "普通重型機車，車牌 已隱藏"
+    assert "ABC-123" not in str(payload)
+
+
 @pytest.mark.parametrize(
     ("plate", "masked"),
     [
@@ -143,11 +152,45 @@ def test_public_feed_masks_plate_like_text_even_if_source_parser_missed_the_iden
 
     assert payload["source_record_id"].startswith("redacted-")
     assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
-    assert payload["official_title"] == "普通重型機車拍賣，車牌 KSS–7***；115-08-01 公告"
-    assert payload["official_case_number"] == "車牌 KSS–7***"
+    assert payload["official_title"] == "普通重型機車拍賣，車牌 已隱藏；115-08-01 公告"
+    assert payload["official_case_number"] == "車牌 已隱藏"
     assert payload["plate_number"] is None
     assert payload["documents"] == []
     assert unparsed_plate not in str(payload)
+
+
+@pytest.mark.parametrize(
+    ("label", "plate"),
+    [
+        ("車牌", "123-4567"),
+        ("車牌", "ABC1234"),
+        ("牌照號碼", "1234567"),
+        ("車號", "AB-1234"),
+    ],
+)
+def test_public_feed_suppresses_labeled_unparsed_plates_everywhere(label: str, plate: str):
+    item = record(
+        identifiers=[], ends_at=None,
+        source_record_id=f"notice-{plate}",
+        official_url=f"https://www.tcy.moj.gov.tw/notice/{plate}/post",
+        official_title=f"普通重型機車拍賣，{label}：{plate}",
+        official_case_number=f"{label} {plate}",
+        location=f"保管地點，{label}為{plate}",
+        evidence=[EvidenceRef(
+            field_name="official_attachment_url",
+            normalized_value=f"https://www.tcy.moj.gov.tw/media/{plate}.pdf",
+            source_text="官方附件",
+        )],
+    )
+
+    payload = public_listing_payload(item, source_adapter="moj_enforcement_cms")
+
+    assert payload["source_record_id"].startswith("redacted-")
+    assert payload["official_url"] == "https://www.tcy.moj.gov.tw/"
+    assert payload["documents"] == []
+    assert payload["plate_number"] is None
+    assert "已隱藏" in payload["official_title"]
+    assert plate not in str(payload)
 
 
 def test_public_feed_projects_only_safe_official_attachment_links_without_evidence_text():

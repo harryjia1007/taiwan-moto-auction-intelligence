@@ -99,6 +99,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     PAGE_SIZE = 30
     MAX_GENERIC_DETAIL_CANDIDATES_PER_BRANCH = 12
     MAX_BYTES = 25 * 1024 * 1024
+    MAX_HTML_BYTES = 1 * 1024 * 1024
+    MAX_CACHED_DETAIL_BYTES = 8 * 1024 * 1024
     MAX_ROBOTS_BYTES = 256 * 1024
     MAX_SITEMAP_BYTES = 8 * 1024 * 1024
     MAX_ATTACHMENTS = 10
@@ -117,6 +119,12 @@ class MojEnforcementCmsAdapter(SourceAdapter):
     )
     AUCTION_PATTERN = re.compile(r"拍賣|變賣|標售|應買")
     NON_VEHICLE_TITLE_PATTERN = re.compile(r"不動產|土地|建物|房屋|房地")
+    VEHICLE_FEE_BOILERPLATE_PATTERN = re.compile(r"(?:汽車|機車)燃料(?:使用)?費|(?:汽車|機車)牌照稅")
+    LOT_CONTEXT_PATTERN = re.compile(
+        r"(?:標的|拍賣品|拍賣物件|拍賣|變賣|標售|應買)\s*(?:為|有|含|包括|：|:)?\s*$"
+    )
+    EXCLUDED_LOT_CONTEXT_PATTERN = re.compile(r"另案|另行|不(?:在|屬|含|包括)|排除|非本次")
+    VEHICLE_COUNT_PATTERN = re.compile(r"(?:汽機車|汽車|機車|車輛|重機)\s*[一二三四五六七八九十\d]+\s*[輛台部]")
     EMPTY_LIST_PATTERN = re.compile(
         r"查無(?:相關|符合條件)?資料|目前(?:尚)?無資料|尚無(?:任何)?資料|沒有(?:符合條件的)?資料"
     )
@@ -158,6 +166,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         self.discovery_warnings: list[str] = []
         self._robots_by_host: dict[str, RobotFileParser] = {}
         self._detail_artifacts: dict[str, RawArtifact] = {}
+        self._cached_detail_bytes = 0
 
     async def close(self) -> None:
         if self._owns_client:
@@ -251,10 +260,18 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                                 if len(chunk) > maximum - len(body):
                                     raise ValueError(f"Artifact exceeds {maximum} bytes")
                                 body.extend(chunk)
+                            # aiter_bytes() already decoded Content-Encoding.
+                            # Reusing that header would make the reconstructed
+                            # response decode again (and can raise on valid gzip).
+                            decoded_headers = {
+                                name: value for name, value in streamed.headers.items()
+                                if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+                            }
+                            decoded_headers["content-length"] = str(len(body))
                             response = httpx.Response(
                                 streamed.status_code,
                                 request=streamed.request,
-                                headers=streamed.headers,
+                                headers=decoded_headers,
                                 content=bytes(body),
                             )
                             break
@@ -374,7 +391,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
 
     @classmethod
     def _is_vehicle_auction_title(cls, title: str) -> bool:
-        normalized = clean(title)
+        normalized = cls.VEHICLE_FEE_BOILERPLATE_PATTERN.sub("", clean(title))
         return bool(cls.VEHICLE_PATTERN.search(normalized) and cls.AUCTION_PATTERN.search(normalized))
 
     @classmethod
@@ -396,7 +413,22 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             title = clean(heading.get_text(" ", strip=True) if heading else "")
         body_node = soup.select_one("section.cp")
         body = clean(body_node.get_text(" ", strip=True) if body_node else "")
-        return bool(title and body and cls._is_vehicle_auction_title(clean(f"{title} {body}")))
+        if not title or not body or not cls.AUCTION_PATTERN.search(title):
+            return False
+        if cls._is_vehicle_auction_title(title):
+            return True
+        # A generic auction title needs a vehicle in the advertised lot, not
+        # merely a tax/fee sentence such as 「欠繳汽車燃料使用費」.
+        body = cls.VEHICLE_FEE_BOILERPLATE_PATTERN.sub("", body)
+        for clause in re.split(r"[，,、。；;！？!?\n]", body):
+            if cls.EXCLUDED_LOT_CONTEXT_PATTERN.search(clause):
+                continue
+            if cls.VEHICLE_COUNT_PATTERN.search(clause):
+                return True
+            for mention in cls.VEHICLE_PATTERN.finditer(clause):
+                if cls.LOT_CONTEXT_PATTERN.search(clause[max(0, mention.start() - 18):mention.start()]):
+                    return True
+        return False
 
     @staticmethod
     def _page_url(list_url: str, page: int, page_size: int) -> str:
@@ -514,7 +546,10 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         if len(sitemap.content) > self.MAX_SITEMAP_BYTES:
             raise ValueError(f"{branch.code}: sitemap exceeds {self.MAX_SITEMAP_BYTES} bytes")
         self._validate_sitemap(sitemap.content, branch)
-        homepage = await self._request(branch.origin + "/", expected_host=branch.host, referer=sitemap_url)
+        homepage = await self._request(
+            branch.origin + "/", expected_host=branch.host, referer=sitemap_url,
+            maximum_bytes=self.MAX_HTML_BYTES,
+        )
         self._require_mime(homepage, {"text/html"}, "homepage")
         self._check_robots(robots.text, branch, [sitemap_url, str(homepage.url)])
         return robots.text, homepage.content
@@ -533,7 +568,10 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                 for page in range(1, self.MAX_LIST_PAGES + 1):
                     page_url = self._page_url(list_url, page, self.PAGE_SIZE)
                     self._check_robots(robots_text, branch, [page_url])
-                    response = await self._request(page_url, expected_host=branch.host, referer=branch.origin + "/")
+                    response = await self._request(
+                        page_url, expected_host=branch.host, referer=branch.origin + "/",
+                        maximum_bytes=self.MAX_HTML_BYTES,
+                    )
                     self._require_mime(response, {"text/html"}, "announcement list")
                     items, dates, has_next = self._items_from_list(response.content, branch, list_url, cutoff)
                     for item in items:
@@ -569,6 +607,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                     official_url,
                     expected_host=branch.host,
                     referer=str(item.discovery_url),
+                    maximum_bytes=self.MAX_HTML_BYTES,
                 )
                 self._require_mime(response, {"text/html"}, "generic auction detail")
                 artifact = self._artifact(response, datetime.now(UTC))
@@ -576,7 +615,9 @@ class MojEnforcementCmsAdapter(SourceAdapter):
                     continue
                 item.metadata.pop("requires_detail_vehicle_validation", None)
                 item.metadata["discovery_method"] = "BRANCH_CMS_GENERIC_TITLE_DETAIL_VALIDATED"
-                self._detail_artifacts[item.source_record_id] = artifact
+                if self._cached_detail_bytes + len(artifact.content) <= self.MAX_CACHED_DETAIL_BYTES:
+                    self._detail_artifacts[item.source_record_id] = artifact
+                    self._cached_detail_bytes += len(artifact.content)
                 found[item.source_record_id] = item
             except (SourceAccessDenied, SourceRateLimited):
                 raise
@@ -590,6 +631,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         self.discovery_warnings = []
         self._robots_by_host.clear()
         self._detail_artifacts.clear()
+        self._cached_detail_bytes = 0
         now = self._now()
         if now.tzinfo is None:
             now = now.replace(tzinfo=TAIPEI)
@@ -651,7 +693,10 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         if primary_artifact is not None and str(primary_artifact.official_url) != official_url:
             raise ValueError("Cached CMS detail does not match the discovered official URL")
         if primary_artifact is None:
-            primary = await self._request(official_url, expected_host=host, referer=str(item.discovery_url))
+            primary = await self._request(
+                official_url, expected_host=host, referer=str(item.discovery_url),
+                maximum_bytes=self.MAX_HTML_BYTES,
+            )
             self._require_mime(primary, {"text/html"}, "detail")
             primary_artifact = self._artifact(primary, fetched_at)
         artifacts = [primary_artifact]
