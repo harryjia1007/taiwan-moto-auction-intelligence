@@ -1,7 +1,9 @@
 name: CMS macOS network diagnostic (temporary)
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - codex/official-source-release-20260823
 
 permissions:
   contents: read
