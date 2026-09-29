@@ -34,4 +34,4 @@ adapter 程式與 fixture tests 位於 `services/ingest/src/ingest/adapters/moj_
 
 2026-09-25 的 GitHub-hosted 正式同步在 13 站都留下空白的 branch-discovery 例外訊息，無法從舊紀錄判定失敗類別；臺灣本機的單站健康檢查可通過，但這不等於 GitHub 排程已修復。後續分署層級的失敗診斷只記錄固定階段（`robots`、`sitemap`、`homepage`、`list_discovery`、`announcement_list`、`generic_detail`）與例外類別，不記錄原始例外文字、案件內容或來源網址。這項變更僅改善定位能力，不放寬 robots、CAPTCHA、網域、重試、速率或失敗時保留既有資料的邊界；確認 GitHub runner 的實際失敗原因後才決定下一步。
 
-2026-09-29 的無密鑰 GitHub-hosted 短測只讀取臺北分署 `robots.txt`：強制 IPv4 時 DNS 已解析但 TCP 連線在 5 秒內未建立，強制 IPv6 也無法連線。這排除了「只要強制 IPv4 就可修好該 runner」的假設，仍不能推論來源有意封鎖雲端或 GCP 臺灣區必然可用。當天多個本機 preflight 不慎同時執行，結果不一致；後續官方站診斷必須單一、低頻、有限時，不可反覆重試到成功。正式來源尚未同步任何 CMS 案件。
+2026-09-29 的無密鑰 GitHub-hosted 短測只讀取臺北分署 `robots.txt`：Linux 強制 IPv4 時 DNS 已解析但 TCP 連線在 5 秒內未建立，強制 IPv6 也無法連線；macOS runner 的 IPv4 亦在 8 秒內無法建立 TCP 連線。這排除了「只要強制 IPv4 或改用 GitHub macOS runner 就可修好」的假設，仍不能推論來源有意封鎖雲端或 GCP 臺灣區必然可用。當天多個本機 preflight 不慎同時執行，結果不一致；後續官方站診斷必須單一、低頻、有限時，不可反覆重試到成功。正式來源尚未同步任何 CMS 案件。
