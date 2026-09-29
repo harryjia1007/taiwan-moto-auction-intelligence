@@ -1,0 +1,26 @@
+name: CMS macOS network diagnostic (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  robots-connectivity:
+    runs-on: macos-latest
+    timeout-minutes: 3
+    steps:
+      - name: One bounded official robots connection test, no credentials
+        shell: bash
+        run: |
+          set -u
+          if result=$(curl -4 --silent --output /dev/null \
+            --max-time 12 --connect-timeout 8 \
+            --write-out '%{http_code} %{time_namelookup} %{time_connect}' \
+            https://www.tpy.moj.gov.tw/robots.txt 2>/dev/null); then
+            exit_code=0
+          else
+            exit_code=$?
+          fi
+          printf 'curl_exit=%s status_dns_connect=%s\n' "$exit_code" "$result"
