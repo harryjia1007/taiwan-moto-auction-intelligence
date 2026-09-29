@@ -17,6 +17,30 @@ from ingest.source_policy import AccessDecision, SourceAccessBlocked
 from ingest.storage import SupabaseArtifactStorage
 
 
+# Probe the release-dependent REST shape without reading any case rows. Both
+# tables are used later in the run, so an older hosted migration ledger must
+# fail before discovery or a sync_runs write rather than after artifact upload.
+PUBLISHER_SCHEMA_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "source_record_artifacts",
+        (
+            "source_record_id", "artifact_id", "first_sync_run_id",
+            "last_sync_run_id", "artifact_role", "sort_order", "last_seen_at",
+        ),
+    ),
+    (
+        "public_source_health",
+        (
+            "source_adapter", "source_name", "status", "last_run_status",
+            "last_attempted_at", "last_successful_at", "discovered_count",
+            "fetched_count", "parsed_count", "changed_count", "failed_count",
+            "parse_success_rate", "warning_codes", "stale_after_hours",
+            "updated_at",
+        ),
+    ),
+)
+
+
 class SupabasePublicPublisher:
     """Publish a sanitized live feed while preserving private source artifacts.
 
@@ -57,6 +81,23 @@ class SupabasePublicPublisher:
             return None
         return response.json()
 
+    async def _preflight_schema(self) -> None:
+        """Require readable publisher tables/columns with zero returned rows."""
+        for table, columns in PUBLISHER_SCHEMA_COLUMNS:
+            path = f"/rest/v1/{table}?select={','.join(columns)}&limit=0"
+            try:
+                rows = await self._json("GET", path)
+                if rows != []:
+                    raise ValueError("unexpected zero-row REST response")
+            except Exception:
+                # Do not surface a remote response body, connection URL, or
+                # service credential in a public workflow failure message.
+                raise RuntimeError(
+                    f"Production publisher schema preflight failed for {table}; "
+                    "verify reviewed hosted migrations and service-role SELECT access "
+                    "before automated discovery"
+                ) from None
+
     async def start(self) -> str:
         encoded_adapter = quote(self.source_adapter, safe="")
         sources = await self._json(
@@ -87,6 +128,7 @@ class SupabasePublicPublisher:
                 f"Production source-access policy for {self.source_adapter} is "
                 f"{decision or 'UNKNOWN'}, not ALLOW; public discovery was blocked"
             )
+        await self._preflight_schema()
         self.source_id = str(source_id)
         runs = await self._json(
             "POST", "/rest/v1/sync_runs",

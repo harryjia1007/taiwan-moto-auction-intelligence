@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SyncResult
-from ingest.public_publisher import SupabasePublicPublisher
+from ingest.public_publisher import PUBLISHER_SCHEMA_COLUMNS, SupabasePublicPublisher
 from ingest.source_policy import SourceAccessBlocked
 
 
@@ -28,6 +28,10 @@ async def test_start_requires_hosted_allow_policy_before_creating_run() -> None:
             return [{"id": "source-id"}]
         if path.startswith("/rest/v1/source_access_policies?"):
             return [{"decision": "ALLOW"}]
+        if any(path.startswith(f"/rest/v1/{table}?") for table, _ in PUBLISHER_SCHEMA_COLUMNS):
+            assert method == "GET"
+            assert path.endswith("&limit=0")
+            return []
         if path == "/rest/v1/sync_runs":
             return [{"id": "run-id"}]
         raise AssertionError(f"unexpected publisher request: {method} {path}")
@@ -39,8 +43,76 @@ async def test_start_requires_hosted_allow_policy_before_creating_run() -> None:
     assert [path.split("?", 1)[0] for _, path, _ in calls] == [
         "/rest/v1/sources",
         "/rest/v1/source_access_policies",
+        "/rest/v1/source_record_artifacts",
+        "/rest/v1/public_source_health",
         "/rest/v1/sync_runs",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failing_table", "rest_failure"),
+    [
+        ("source_record_artifacts", "PGRST205: missing table"),
+        ("public_source_health", "PGRST205: missing table"),
+        ("source_record_artifacts", "42703: missing column"),
+    ],
+)
+async def test_start_fails_closed_when_required_hosted_table_or_column_is_missing(
+    failing_table: str,
+    rest_failure: str,
+) -> None:
+    publisher = publisher_without_network()
+    calls: list[tuple[str, str]] = []
+
+    async def fake_json(method: str, path: str, **kwargs):
+        calls.append((method, path))
+        if path.startswith("/rest/v1/sources?"):
+            return [{"id": "source-id"}]
+        if path.startswith("/rest/v1/source_access_policies?"):
+            return [{"decision": "ALLOW"}]
+        if path.startswith(f"/rest/v1/{failing_table}?"):
+            raise RuntimeError(f"{rest_failure}: Bearer sensitive-test-key")
+        if any(path.startswith(f"/rest/v1/{table}?") for table, _ in PUBLISHER_SCHEMA_COLUMNS):
+            return []
+        raise AssertionError("schema preflight failure must stop before a sync run")
+
+    publisher._json = fake_json
+
+    with pytest.raises(RuntimeError, match=f"schema preflight failed for {failing_table}") as error:
+        await publisher.start()
+
+    assert "sensitive-test-key" not in str(error.value)
+    assert error.value.__cause__ is None
+    assert publisher.source_id is None
+    assert publisher.run_id is None
+    assert all(method == "GET" for method, _ in calls)
+    assert not any(path == "/rest/v1/sync_runs" for _, path in calls)
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_unexpected_schema_preflight_response() -> None:
+    publisher = publisher_without_network()
+    calls: list[str] = []
+
+    async def fake_json(method: str, path: str, **kwargs):
+        calls.append(path)
+        if path.startswith("/rest/v1/sources?"):
+            return [{"id": "source-id"}]
+        if path.startswith("/rest/v1/source_access_policies?"):
+            return [{"decision": "ALLOW"}]
+        if path.startswith("/rest/v1/source_record_artifacts?"):
+            return None
+        raise AssertionError("invalid schema response must stop before a sync run")
+
+    publisher._json = fake_json
+
+    with pytest.raises(RuntimeError, match="schema preflight failed for source_record_artifacts"):
+        await publisher.start()
+
+    assert publisher.source_id is None
+    assert publisher.run_id is None
+    assert not any(path == "/rest/v1/sync_runs" for path in calls)
 
 
 @pytest.mark.asyncio

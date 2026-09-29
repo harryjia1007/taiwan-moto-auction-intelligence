@@ -35,3 +35,5 @@ adapter 程式與 fixture tests 位於 `services/ingest/src/ingest/adapters/moj_
 2026-09-25 的 GitHub-hosted 正式同步在 13 站都留下空白的 branch-discovery 例外訊息，無法從舊紀錄判定失敗類別；臺灣本機的單站健康檢查可通過，但這不等於 GitHub 排程已修復。後續分署層級的失敗診斷只記錄固定階段（`robots`、`sitemap`、`homepage`、`list_discovery`、`announcement_list`、`generic_detail`）與例外類別，不記錄原始例外文字、案件內容或來源網址。這項變更僅改善定位能力，不放寬 robots、CAPTCHA、網域、重試、速率或失敗時保留既有資料的邊界；確認 GitHub runner 的實際失敗原因後才決定下一步。
 
 2026-09-29 的無密鑰 GitHub-hosted 短測只讀取臺北分署 `robots.txt`：Linux 強制 IPv4 時 DNS 已解析但 TCP 連線在 5 秒內未建立，強制 IPv6 也無法連線；macOS runner 的 IPv4 亦在 8 秒內無法建立 TCP 連線。這排除了「只要強制 IPv4 或改用 GitHub macOS runner 就可修好」的假設，仍不能推論來源有意封鎖雲端或 GCP 臺灣區必然可用。當天多個本機 preflight 不慎同時執行，結果不一致；後續官方站診斷必須單一、低頻、有限時，不可反覆重試到成功。正式來源尚未同步任何 CMS 案件。
+
+同日查核官方替代管道，本次未找到可由 GitHub 排程無驗證碼完整提供 13 分署車輛案件的正式 API／資料集。[中央拍賣系統操作手冊](https://www.tpkonsale.moj.gov.tw/File/GetOperationManual)所示動產查詢使用驗證碼；政府開放資料平臺可核對的[行政執行署拍賣資料集](https://data.gov.tw/dataset/177921)是已拍定不動產且不定期更新；[法務部 RSS](https://www.moj.gov.tw/2807/2816/)不是車輛標的 feed。這些來源都不得被冒充為 CMS 案件同步或用來推定目前沒有車輛。後續可向[行政執行署](https://www.tpk.moj.gov.tw/)或透過[政府資料開放提案](https://data.gov.tw/suggests)申請核准的機器可讀介接。
