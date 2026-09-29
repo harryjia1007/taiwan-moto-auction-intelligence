@@ -11,6 +11,7 @@ import httpx
 from ingest import PARSER_VERSION
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SyncResult
 from ingest.public_feed import public_listing_payload
+from ingest.source_policy import AccessDecision, SourceAccessBlocked
 from ingest.storage import SupabaseArtifactStorage
 
 
@@ -55,10 +56,31 @@ class SupabasePublicPublisher:
         return response.json()
 
     async def start(self) -> str:
-        sources = await self._json("GET", f"/rest/v1/sources?adapter_name=eq.{self.source_adapter}&select=id&limit=1")
-        if not sources:
-            raise RuntimeError(f"Production source registry has no {self.source_adapter} source")
-        self.source_id = sources[0]["id"]
+        sources = await self._json(
+            "GET",
+            f"/rest/v1/sources?adapter_name=eq.{quote(self.source_adapter, safe='')}&select=id&limit=2",
+        )
+        if not isinstance(sources, list) or len(sources) != 1 or not isinstance(sources[0], dict):
+            raise SourceAccessBlocked(f"Production source registry has no unique {self.source_adapter} source")
+        source_id = sources[0].get("id")
+        if not source_id:
+            raise SourceAccessBlocked(f"Production source registry has no valid id for {self.source_adapter}")
+        policies = await self._json(
+            "GET",
+            "/rest/v1/source_access_policies"
+            f"?source_id=eq.{quote(str(source_id), safe='')}&select=decision&limit=2",
+        )
+        if not isinstance(policies, list) or len(policies) != 1 or not isinstance(policies[0], dict):
+            raise SourceAccessBlocked(
+                f"Production source-access registry has no unique policy for {self.source_adapter}; "
+                "public discovery was blocked"
+            )
+        if policies[0].get("decision") != AccessDecision.ALLOW:
+            raise SourceAccessBlocked(
+                f"Production source-access policy for {self.source_adapter} is not ALLOW; "
+                "public discovery was blocked"
+            )
+        self.source_id = str(source_id)
         runs = await self._json(
             "POST", "/rest/v1/sync_runs",
             headers={**self.headers, "Prefer": "return=representation"},

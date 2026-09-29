@@ -25,11 +25,14 @@
 - 日期、底價、車牌、廠牌、型號、鑰匙、可發動、過戶與報廢限制都只從 HTML 明文正規化。PDF 目前先保留，不以未解析附件內容補值。
 - 「無法測試」不等於「無法發動」；未知值維持 `UNKNOWN`。
 - generic 車輛公告是一個 lot，不建立虛構的單車 vehicle row。
+- 多車牌或整批公告只保留原文與 lot 層級車牌；共用描述中的廠牌、型號、年份、排氣量與顏色不複製到個別車輛，也不假設每個車牌有相同規格。
 
 ## 已知缺口與目前整合狀態
 
 部分分署只在 PDF、圖片或 CAPTCHA 中列出個別車輛；另有頁面只有 CMS 轉址連結而沒有可驗證的日期公告列。這個 adapter 不從附件內容或不明轉址推測車輛，也不超出兩個清單、每個清單兩頁及 12 個泛稱明細的安全上限；這些缺口會顯示警告。可另由中央人工 manifest、取得正式 feed，或日後經核准的 PDF 文字解析補足，不能把本來源的零筆誤稱全站沒有拍賣。
 
 adapter 程式與 fixture tests 位於 `services/ingest/src/ingest/adapters/moj_enforcement_cms.py` 與 `services/ingest/tests/test_moj_enforcement_cms_adapter.py`。來源政策、獨立 source UUID、repository mapping、CLI、同步警告、公開投影與每日兩次排程均已接妥；它不覆寫既有 CAPTCHA 人工來源。個別分署失敗時 run 維持 `PARTIAL`，全部分署都無法安全檢查時整次失敗，既有正式資料不會被當成零案件清除。即使一次正式唯讀同步成功，也只能代表當次可讀的 13 個 CMS 公告清單，不代表中央 CAPTCHA 清單或全國所有車輛拍賣已完整涵蓋。
+
+正式公開寫入器在建立 sync run 前，會要求託管資料庫恰有一筆此來源的 `source_access_policies`，且決策為 `ALLOW`；缺失、重複、未授權或查詢失敗均停止，不會在失敗時退回程式內較舊的授權決策。這是發布前授權檢查，不代表來源連線或正式同步已成功。
 
 2026-09-25 的 GitHub-hosted 正式同步在 13 站都留下空白的 branch-discovery 例外訊息，無法從舊紀錄判定失敗類別；臺灣本機的單站健康檢查可通過，但這不等於 GitHub 排程已修復。後續分署層級的失敗診斷只記錄固定階段（`robots`、`sitemap`、`homepage`、`list_discovery`、`announcement_list`、`generic_detail`）與例外類別，不記錄原始例外文字、案件內容或來源網址。這項變更僅改善定位能力，不放寬 robots、CAPTCHA、網域、重試、速率或失敗時保留既有資料的邊界；確認 GitHub runner 的實際失敗原因後才決定下一步。

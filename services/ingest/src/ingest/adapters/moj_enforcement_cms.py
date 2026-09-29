@@ -29,7 +29,6 @@ from ingest.models import (
     EvidenceRef,
     FourState,
     ParsedAuctionRecord,
-    ParsedVehicleUnit,
     RawArtifact,
     RegistrationStatus,
     SourceHealth,
@@ -780,6 +779,12 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             or lot_size > 1
             or bool(re.search(r"一批|整批|及其他動產", combined))
         )
+        if bulk_lot:
+            # Shared prose does not prove which vehicle owns a brand, model or
+            # specification. Keep the original text and plate identifiers on
+            # the lot without projecting one set of facts onto every plate.
+            brand = model = color = None
+            manufacture_year = manufacture_month = displacement = None
 
         creator = soup.select_one("meta[name='DC.Creator']")
         organization = clean(
@@ -819,10 +824,6 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             )
             for plate in plates
         ]
-        units = [
-            ParsedVehicleUnit(source_vehicle_key=f"plate:{identifier.normalized_value}", identifiers=[identifier])
-            for identifier in identifiers
-        ] if len(identifiers) > 1 else []
         pdf_count = sum(artifact.mime_type == "application/pdf" for artifact in artifacts)
         evidence: list[EvidenceRef] = [
             EvidenceRef(
@@ -896,7 +897,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             registration_status=registration,
             condition_summary=_explicit_fact_sentence(combined, r"車況|刮傷|損壞|漏油|發動|鑰匙"),
             identifiers=identifiers,
-            vehicle_units=units,
+            vehicle_units=[],
             photo_urls=[],
             evidence=evidence,
             completeness=completeness,
