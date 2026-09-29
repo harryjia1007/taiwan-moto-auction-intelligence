@@ -646,3 +646,52 @@ async def test_explicit_bulk_notice_does_not_assign_shared_specs_to_single_plate
     assert parsed.brand is None
     assert parsed.displacement_cc is None
     assert [identifier.original_value for identifier in parsed.identifiers] == ["AAA-111"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_bulk_notice_does_not_assign_conflicting_vehicle_facts() -> None:
+    content = """<html><head>
+      <meta name='ContentTitle' content='小客車及大型重型機車整批拍賣公告'>
+      </head><body><section class='cp'>
+      小客車及大型重型機車整批，車牌 AAA-111、BBB-222。
+      前車有鑰匙可發動可測試，得辦理移轉過戶；後車無鑰匙無法發動不得測試，僅供報廢。
+      115/10/01 10:00 拍賣，核定底價20,000元，僅合格回收商得投標。
+      </section></body></html>""".encode()
+    url = f"{BRANCH.origin}/9103/9127/9129/1766003/post"
+    item = DiscoveredItem(
+        source_record_id="tcy-1766003", official_url=url,
+        discovery_url=f"{BRANCH.origin}/9103/9127/9129/",
+        title="小客車及大型重型機車整批拍賣公告",
+    )
+    artifact = RawArtifact(
+        official_url=url, fetched_at=datetime.now(UTC), mime_type="text/html",
+        filename="post", content=content,
+        checksum_sha256=hashlib.sha256(content).hexdigest(),
+    )
+    adapter = MojEnforcementCmsAdapter(
+        branches=(BRANCH,), request_interval=0,
+        now=lambda: datetime(2026, 9, 1, tzinfo=TAIPEI),
+    )
+    try:
+        parsed = await adapter.parse(item, [artifact])
+    finally:
+        await adapter.close()
+
+    assert parsed.vehicle_type == "MIXED"
+    assert parsed.bulk_lot is True
+    assert parsed.vehicle_units == []
+    assert parsed.vehicle_class == "UNKNOWN"
+    assert parsed.car_category == "UNKNOWN"
+    assert parsed.has_key == "UNKNOWN"
+    assert parsed.can_start == "UNKNOWN"
+    assert parsed.can_test == "UNKNOWN"
+    assert parsed.registration_status == "UNKNOWN"
+    assert parsed.condition_summary is None
+    assert parsed.completeness_groups["condition"] == 0
+    assert {e.field_name for e in parsed.evidence}.isdisjoint({
+        "vehicle_class", "car_category", "registration_status", "has_key",
+    })
+    assert parsed.ends_at == datetime(2026, 10, 1, 10, 0, tzinfo=TAIPEI)
+    assert parsed.reserve_price == 20_000
+    assert parsed.eligibility == "LICENSED_RECYCLER_ONLY"
+    assert "無法發動" in (parsed.description or "")

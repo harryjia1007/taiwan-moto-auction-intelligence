@@ -1,3 +1,6 @@
+import pytest
+
+import ingest.cli as cli
 from ingest.cli import record_discovery_warnings, record_partial_item, supabase_backend_key
 from ingest.models import DiscoveredItem, SyncResult
 
@@ -42,3 +45,37 @@ def test_branch_discovery_warnings_are_preserved_without_fake_item_failures() ->
 
     assert result.failed == 0
     assert result.warnings == ["tcy: timed out", "ily: robots changed"]
+
+
+@pytest.mark.asyncio
+async def test_public_publisher_start_failure_closes_clients_without_finishing_run(monkeypatch) -> None:
+    events: list[str] = []
+
+    class FakeAdapter:
+        async def discover(self) -> None:
+            events.append("discover")
+            raise AssertionError("Discovery must not run after publisher preflight fails")
+
+        async def close(self) -> None:
+            events.append("adapter.close")
+
+    class FakePublisher:
+        async def start(self) -> None:
+            events.append("publisher.start")
+            raise RuntimeError("test-only source policy denied")
+
+        async def finish(self, result: SyncResult) -> None:
+            events.append("publisher.finish")
+
+        async def close(self) -> None:
+            events.append("publisher.close")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "test-only-key")
+    monkeypatch.setattr(cli, "adapter_for", lambda source: FakeAdapter())
+    monkeypatch.setattr(cli, "SupabasePublicPublisher", lambda *args, **kwargs: FakePublisher())
+
+    with pytest.raises(RuntimeError, match="source policy denied"):
+        await cli.run_publish_public("moj_enforcement_cms", None)
+
+    assert events == ["publisher.start", "adapter.close", "publisher.close"]

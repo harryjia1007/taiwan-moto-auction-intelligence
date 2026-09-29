@@ -250,8 +250,10 @@ async def run_publish_public(source: str, limit: int | None) -> None:
         source_name=PUBLIC_AUTOMATED_SOURCES[source],
     )
     result = SyncResult(source=source, discovered=0, fetched=0, parsed=0, changed=0, failed=0)
-    await publisher.start()
+    started = False
     try:
+        await publisher.start()
+        started = True
         try:
             items = await adapter.discover()
         except Exception as exc:
@@ -280,9 +282,14 @@ async def run_publish_public(source: str, limit: int | None) -> None:
         if result.fetched and result.parsed / result.fetched < 0.9:
             result.warnings.append("Parse success rate fell below 90%")
     finally:
-        await adapter.close()
-        await publisher.finish(result)
-        await publisher.close()
+        try:
+            await adapter.close()
+        finally:
+            try:
+                if started:
+                    await publisher.finish(result)
+            finally:
+                await publisher.close()
     typer.echo(result.model_dump_json(indent=2))
 
 

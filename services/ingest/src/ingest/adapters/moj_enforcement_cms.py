@@ -25,6 +25,7 @@ from ingest.adapters.base import (
 from ingest.models import (
     AuctionStatus,
     BidEligibility,
+    CarCategory,
     DiscoveredItem,
     EvidenceRef,
     FourState,
@@ -33,6 +34,7 @@ from ingest.models import (
     RegistrationStatus,
     SourceHealth,
     VehicleIdentifier,
+    VehicleClass,
     VehicleType,
 )
 from ingest.parser import (
@@ -816,6 +818,18 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             registration = RegistrationStatus.UNKNOWN
         recycler_only = bool(re.search(r"廢機動車輛回收|合格回收商|回收業資格", combined))
         eligibility = BidEligibility.LICENSED_RECYCLER_ONLY if recycler_only else BidEligibility.UNKNOWN
+        condition_summary = _explicit_fact_sentence(combined, r"車況|刮傷|損壞|漏油|發動|鑰匙")
+        if bulk_lot:
+            # A shared notice may describe different vehicles with opposite
+            # classes, conditions or registration rights. Until each claim is
+            # attributable to an identified vehicle, retain it only in the
+            # original description and do not project it as a common fact.
+            vehicle_class = VehicleClass.UNKNOWN
+            car_category = CarCategory.UNKNOWN
+            vehicle_class_text = car_category_text = None
+            has_key = can_start = can_test = FourState.UNKNOWN
+            registration = RegistrationStatus.UNKNOWN
+            condition_summary = None
         identifiers = [
             VehicleIdentifier(
                 identifier_type="PLATE",
@@ -846,8 +860,8 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             ("vehicle_type", vehicle_type.value, vehicle_type_text or ("車輛" if "車輛" in combined else None)),
             ("vehicle_class", vehicle_class.value, vehicle_class_text),
             ("car_category", car_category.value, car_category_text),
-            ("registration_status", registration.value, _explicit_fact_sentence(combined, r"領牌|過戶|報廢")),
-            ("has_key", has_key.value, _explicit_fact_sentence(combined, r"鑰匙")),
+            ("registration_status", registration.value, None if bulk_lot else _explicit_fact_sentence(combined, r"領牌|過戶|報廢")),
+            ("has_key", has_key.value, None if bulk_lot else _explicit_fact_sentence(combined, r"鑰匙")),
         ):
             if source:
                 evidence.append(EvidenceRef(
@@ -860,7 +874,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
         completeness, groups = _completeness_groups({
             "identity": [plates, brand, model, vehicle_type],
             "auction": [organization, auction_at, reserve_price, status, eligibility],
-            "condition": [has_key, can_start, can_test, body],
+            "condition": [has_key, can_start, can_test, None if bulk_lot else body],
             "registration": [registration, plates, FourState.UNKNOWN],
             "fees": [None, None, None],
             "media": [["official-pdf"] if pdf_count or item.metadata.get("official_attachment_urls") else []],
@@ -895,7 +909,7 @@ class MojEnforcementCmsAdapter(SourceAdapter):
             can_start=can_start,
             can_test=can_test,
             registration_status=registration,
-            condition_summary=_explicit_fact_sentence(combined, r"車況|刮傷|損壞|漏油|發動|鑰匙"),
+            condition_summary=condition_summary,
             identifiers=identifiers,
             vehicle_units=[],
             photo_urls=[],
