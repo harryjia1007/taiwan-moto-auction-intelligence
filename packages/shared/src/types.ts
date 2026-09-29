@@ -86,11 +86,15 @@ export interface Motorcycle {
   riskBadges: string[];
   imageUrl: string | null;
   imageUrls?: string[];
+  sharedLotImageUrls?: string[];
+  mediaState?: "AVAILABLE" | "NOT_PROVIDED" | "UNAVAILABLE";
   mediaNote?: string;
+  dataWarnings?: string[];
   completeness: number;
   completenessGroups: Record<string, number>;
   favorite: boolean;
   evidence: Evidence[];
+  sharedLotEvidence?: Evidence[];
   history: PricePoint[];
   duplicateCandidates: DuplicateCandidate[];
   documents?: AuctionDocument[];

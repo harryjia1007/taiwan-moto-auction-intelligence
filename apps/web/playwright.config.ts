@@ -11,7 +11,13 @@ export default defineConfig({
     command: `pnpm exec next dev -H 127.0.0.1 -p ${port}`,
     url: `http://127.0.0.1:${port}/motorcycles`,
     reuseExistingServer: !process.env.CI,
-    env: { TM_FIXTURE_MODE: "true", OWNER_EMAIL: "owner@example.com" },
+    env: {
+      TM_FIXTURE_MODE: "true",
+      OWNER_EMAIL: "owner@example.com",
+      // Polling avoids exhausting macOS watcher descriptors during the local
+      // browser suite; CI keeps the same deterministic fixture-mode server.
+      WATCHPACK_POLLING: "true",
+    },
   },
   projects: [
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },

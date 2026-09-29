@@ -11,6 +11,7 @@ OVERVIEW = """
 <html><body><main><h1>海關私貨拍賣訊息</h1>
 <p>基隆關、臺北關、臺中關、高雄關標售公告</p></main></body></html>
 """.encode()
+ROBOTS = b"User-agent: *\nDisallow: /download/\nAllow: /\n"
 
 
 @pytest.mark.asyncio
@@ -23,6 +24,8 @@ async def test_customs_discovers_html_vehicle_and_never_downloads_attachment() -
 
     def handler(request: httpx.Request) -> httpx.Response:
         contacted.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path == "/singlehtml/1207":
             return httpx.Response(200, content=OVERVIEW, headers={"content-type": "text/html"})
         if request.url.path == "/taichung/multiplehtml/396":
@@ -60,7 +63,14 @@ async def test_customs_discovers_html_vehicle_and_never_downloads_attachment() -
     assert [entry.normalized_value for entry in attachment_evidence] == [
         "https://web.customs.gov.tw/download/customs-fixture-vehicle-list.pdf"
     ]
+    assert all(entry.extraction_method == "HTML" for entry in attachment_evidence)
     assert not any("/download/" in url for url in contacted)
+    evidence_by_field = {entry.field_name: entry for entry in parsed.evidence}
+    artifacts_by_checksum = {artifact.checksum_sha256: artifact for artifact in artifacts}
+    for field_name in ("title", "organization"):
+        evidence = evidence_by_field[field_name]
+        assert evidence.artifact_checksum_sha256 in artifacts_by_checksum
+        assert evidence.source_text.encode() in artifacts_by_checksum[evidence.artifact_checksum_sha256].content
 
 
 def test_customs_listing_candidates_are_scoped_to_the_office_detail_channel() -> None:
@@ -93,10 +103,42 @@ async def test_customs_blocks_downloads_other_hosts_and_insecure_urls() -> None:
 
 @pytest.mark.asyncio
 async def test_customs_fails_closed_on_non_html_response() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         return httpx.Response(200, content=b"%PDF fixture", headers={"content-type": "application/pdf"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
         adapter = CustomsAuctionAdapter(client=client, request_interval=0)
         with pytest.raises(ValueError, match="unexpected MIME"):
             await adapter._request("https://web.customs.gov.tw/taichung/multiplehtml/396")
+
+
+@pytest.mark.asyncio
+async def test_customs_records_a_coverage_warning_when_page_bound_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = """
+      <html><body><h1>標售公告</h1><table><tbody></tbody></table>
+      <a href='/taichung/multiplehtml/396?page=2'>下一頁</a></body></html>
+    """.encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        if request.url.path == "/singlehtml/1207":
+            return httpx.Response(200, content=OVERVIEW, headers={"content-type": "text/html"})
+        return httpx.Response(200, content=listing, headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(CustomsAuctionAdapter, "MAX_LIST_PAGES_PER_OFFICE", 1)
+    office_lists = {
+        "taichung": (
+            "財政部關務署臺中關",
+            "https://web.customs.gov.tw/taichung/multiplehtml/396",
+        )
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = CustomsAuctionAdapter(client=client, request_interval=0, office_lists=office_lists)
+        assert await adapter.discover() == []
+
+    assert any("page safety bound" in warning for warning in adapter._discovery_warnings)

@@ -14,6 +14,7 @@ on:
           - pcc
           - customs
           - moj_enforcement_cms
+          - judicial_notices
   schedule:
     - cron: "30 1,13 * * *"
 
@@ -22,11 +23,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  public-safety:
+    name: 公開資料安全邊界
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate hosted publication credentials
+        run: |
+          test -n "$SUPABASE_URL" || { echo "Missing SUPABASE_URL repository secret"; exit 1; }
+          test -n "$SUPABASE_SECRET_KEY" || { echo "Missing SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY) repository secret"; exit 1; }
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Remove photos without anonymous republication rights
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --request PATCH \
+            --header "apikey: $SUPABASE_SECRET_KEY" \
+            --header "Authorization: Bearer $SUPABASE_SECRET_KEY" \
+            --header "Content-Type: application/json" \
+            --header "Prefer: return=minimal" \
+            --data '{"photo_urls":[]}' \
+            "$SUPABASE_URL/rest/v1/public_live_motorcycle_listings?id=not.is.null"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  catalog-watch:
+    name: data.gov.tw 官方資料目錄監看
+    needs: ingest
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r services/ingest/requirements.lock
+      - run: pip install --no-deps services/ingest
+      - name: Watch official open-data catalog
+        run: python -m ingest watch-data-catalog --lookback-days 14
+
   ingest:
     name: ${{ matrix.label }}
+    needs: public-safety
     strategy:
       fail-fast: false
       matrix:
+        # Do not add `judicial`: aomp109 is MANUAL_ONLY and its adapter must
+        # make zero network requests. Do not add `shwoo` to hosted runners:
+        # full discovery is operated separately from a Taiwan network.
         include:
           - source: moj_auction
             label: 法務部集中拍賣
@@ -36,6 +88,8 @@ jobs:
             label: 財政部關務署四關標售公告
           - source: moj_enforcement_cms
             label: 行政執行署 13 分署公告
+          - source: judicial_notices
+            label: 司法院其他司法公告（車輛拍賣補充）
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -71,3 +125,4 @@ jobs:
           PCC_REQUEST_INTERVAL_SECONDS: "1"
           CUSTOMS_REQUEST_INTERVAL_SECONDS: "1"
           MOJ_ENFORCEMENT_CMS_REQUEST_INTERVAL_SECONDS: "1"
+          JUDICIAL_NOTICES_REQUEST_INTERVAL_SECONDS: "1"

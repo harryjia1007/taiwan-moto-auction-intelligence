@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from ingest.public_publisher import SupabasePublicPublisher
+from ingest.public_publisher import PUBLISHER_SCHEMA_COLUMNS, SupabasePublicPublisher
 from ingest.source_policy import SourceAccessBlocked
 
 
@@ -22,6 +22,8 @@ async def test_hosted_publisher_starts_only_with_unique_allow_policy() -> None:
             return [{"id": "source-id"}]
         if path.startswith("/rest/v1/source_access_policies?"):
             return [{"decision": "ALLOW"}]
+        if any(path.startswith(f"/rest/v1/{table}?") for table, _ in PUBLISHER_SCHEMA_COLUMNS):
+            return []
         if method == "POST" and path == "/rest/v1/sync_runs":
             return [{"id": "run-id"}]
         raise AssertionError(f"Unexpected publisher call: {method} {path}")
@@ -35,6 +37,10 @@ async def test_hosted_publisher_starts_only_with_unique_allow_policy() -> None:
     assert calls == [
         ("GET", "/rest/v1/sources?adapter_name=eq.moj_enforcement_cms&select=id&limit=2"),
         ("GET", "/rest/v1/source_access_policies?source_id=eq.source-id&select=decision&limit=2"),
+        *[
+            ("GET", f"/rest/v1/{table}?select={','.join(columns)}&limit=0")
+            for table, columns in PUBLISHER_SCHEMA_COLUMNS
+        ],
         ("POST", "/rest/v1/sync_runs"),
     ]
 

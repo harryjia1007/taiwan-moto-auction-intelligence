@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import hashlib
 
 FIXTURES = Path(__file__).parent / "fixtures"
+ROBOTS = b"User-agent: *\nAllow: /\n"
 
 
 @pytest.mark.asyncio
@@ -18,6 +19,8 @@ async def test_moj_central_discovery_fetch_and_parse() -> None:
     detail = (FIXTURES / "moj_auction_detail.html").read_bytes()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path.endswith("searchList"):
             return httpx.Response(200, content=listing, headers={"content-type": "text/html"})
         if request.url.path.endswith("/90001/post"):
@@ -43,6 +46,28 @@ async def test_moj_central_discovery_fetch_and_parse() -> None:
     assert parsed.disposal_origin == "CRIMINAL_SEIZURE_OR_FORFEITURE"
     assert parsed.identifiers[0].normalized_value == "TST3001"
     assert len(parsed.photo_urls) == 1
+    html_artifact = next(artifact for artifact in artifacts if artifact.mime_type == "text/html")
+    assert all(
+        evidence.artifact_checksum_sha256 == html_artifact.checksum_sha256
+        for evidence in parsed.evidence
+    )
+    assert {evidence.field_name for evidence in parsed.evidence} >= {
+        "title",
+        "official_case_number",
+        "organization",
+        "disposal_origin",
+        "ends_at",
+        "status",
+        "lot_size",
+        "vehicle_type",
+        "vehicle_class",
+        "eligibility",
+        "description",
+        "brand",
+        "model",
+        "displacement_cc",
+        "plate",
+    }
 
 
 @pytest.mark.asyncio
@@ -120,6 +145,8 @@ async def test_redirect_is_validated_before_contacting_legacy_host() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         contacted.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         return httpx.Response(302, headers={"location": "http://www.tcc.moj.gov.tw/legacy"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -127,7 +154,10 @@ async def test_redirect_is_validated_before_contacting_legacy_host() -> None:
         with pytest.raises(ValueError, match="Blocked"):
             await adapter._request("https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564")
 
-    assert contacted == ["https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564"]
+    assert contacted == [
+        MojAuctionAdapter.ROBOTS_URL,
+        "https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564",
+    ]
 
 
 @pytest.mark.asyncio
@@ -137,6 +167,8 @@ async def test_external_detail_keeps_exact_central_summary_without_contacting_ex
 
     def handler(request: httpx.Request) -> httpx.Response:
         contacted.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         if request.url.path.endswith("searchList"):
             return httpx.Response(200, content=listing, headers={"content-type": "text/html; charset=utf-8"})
         if request.url.path.endswith("CountAndRedirectUrl"):
@@ -150,6 +182,7 @@ async def test_external_detail_keeps_exact_central_summary_without_contacting_ex
         parsed = await adapter.parse(items[0], artifacts)
 
     assert contacted == [
+        MojAuctionAdapter.ROBOTS_URL,
         "https://auction.moj.gov.tw/1724/1726/searchList?Page=1&PageSize=100&type=01",
         "https://auction.moj.gov.tw/umbraco/surface/Ini/CountAndRedirectUrl?nodeId=13564",
     ]
@@ -165,12 +198,99 @@ async def test_external_detail_keeps_exact_central_summary_without_contacting_ex
 
 
 @pytest.mark.asyncio
+async def test_timed_out_detail_keeps_the_exact_central_summary_instead_of_dropping_the_record() -> None:
+    listing = (FIXTURES / "moj_auction_external_summary_list.html").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        if request.url.path.endswith("searchList"):
+            return httpx.Response(200, content=listing, headers={"content-type": "text/html; charset=utf-8"})
+        if request.url.path.endswith("CountAndRedirectUrl"):
+            raise httpx.ReadTimeout("official detail timed out", request=request)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        item = (await adapter.discover())[0]
+        artifacts = await adapter.fetch(item)
+        parsed = await adapter.parse(item, artifacts)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].filename == "moj-auction-list-row-node-13564.html"
+    assert parsed.vehicle_type == "MOTORCYCLE"
+    assert "ReadTimeout" in item.metadata[MojAuctionAdapter.PARTIAL_FAILURE_KEY]
+
+
+@pytest.mark.asyncio
+async def test_supporting_file_timeout_keeps_official_detail_and_stops_remaining_files() -> None:
+    listing = (FIXTURES / "moj_auction_list.html").read_bytes()
+    detail = (FIXTURES / "moj_auction_detail.html").read_bytes()
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        contacted.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        if request.url.path.endswith("searchList"):
+            return httpx.Response(200, content=listing, headers={"content-type": "text/html"})
+        if request.url.path.endswith("/90001/post"):
+            return httpx.Response(200, content=detail, headers={"content-type": "text/html"})
+        if request.url.path.endswith("motorcycle.jpg"):
+            raise httpx.ReadTimeout("supporting file unavailable", request=request)
+        raise AssertionError(f"remaining files must not be requested: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        item = (await adapter.discover())[0]
+        artifacts = await adapter.fetch(item)
+        parsed = await adapter.parse(item, artifacts)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].content == detail
+    assert parsed.vehicle_type == "MOTORCYCLE"
+    assert "ReadTimeout" in item.metadata[MojAuctionAdapter.PARTIAL_FAILURE_KEY]
+    assert "/media/fixture/evidence.zip" not in contacted
+    assert "/media/fixture/notice.pdf" not in contacted
+
+
+@pytest.mark.asyncio
+async def test_supporting_file_safety_bound_marks_moj_record_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = (FIXTURES / "moj_auction_list.html").read_bytes()
+    detail = (FIXTURES / "moj_auction_detail.html").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        if request.url.path.endswith("searchList"):
+            return httpx.Response(200, content=listing, headers={"content-type": "text/html"})
+        if request.url.path.endswith("/90001/post"):
+            return httpx.Response(200, content=detail, headers={"content-type": "text/html"})
+        if request.url.path.endswith("motorcycle.jpg"):
+            return httpx.Response(200, content=b"fixture-image", headers={"content-type": "image/jpeg"})
+        raise AssertionError(f"attachment safety bound was exceeded: {request.url}")
+
+    monkeypatch.setattr(MojAuctionAdapter, "MAX_ATTACHMENTS", 1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        item = (await adapter.discover())[0]
+        artifacts = await adapter.fetch(item)
+
+    assert len(artifacts) == 2
+    assert "only the first 1" in item.metadata[MojAuctionAdapter.PARTIAL_FAILURE_KEY]
+
+
+@pytest.mark.asyncio
 async def test_repeated_discovery_clears_stale_central_summary_artifacts() -> None:
     first_listing = (FIXTURES / "moj_auction_external_summary_list.html").read_bytes()
     empty_listing = b"<html><body><table class='table_list'><tbody></tbody></table></body></html>"
     responses = iter((first_listing, empty_listing))
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
         assert request.url.path.endswith("searchList")
         return httpx.Response(200, content=next(responses), headers={"content-type": "text/html"})
 
@@ -183,6 +303,28 @@ async def test_repeated_discovery_clears_stale_central_summary_artifacts() -> No
 
     assert second_items == []
     assert adapter._central_summary_artifacts == {}
+
+
+@pytest.mark.asyncio
+async def test_moj_records_a_coverage_warning_when_page_bound_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = (FIXTURES / "moj_auction_list.html").read_bytes().replace(
+        b"</body>",
+        b"<ul class='page'><li><a href='?Page=2'>2</a></li></ul></body>",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=ROBOTS, headers={"content-type": "text/plain"})
+        return httpx.Response(200, content=listing, headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(MojAuctionAdapter, "MAX_PAGES", 1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = MojAuctionAdapter(client=client, request_interval=0)
+        await adapter.discover()
+
+    assert any("page safety bound" in warning for warning in adapter.discovery_warnings)
 
 
 def test_mixed_vehicle_notice_is_retained_without_inventing_one_vehicle_class() -> None:
@@ -233,3 +375,25 @@ def test_car_notice_is_parsed_as_car_without_motorcycle_class() -> None:
     assert parsed.vehicle_class == "UNKNOWN"
     assert parsed.displacement_cc == 1798
     assert parsed.identifiers[0].normalized_value == "ABC1234"
+
+
+def test_moj_detail_does_not_promote_discovery_title_on_error_markup() -> None:
+    content = b"<html><body><h1>temporary error</h1></body></html>"
+    url = "https://auction.moj.gov.tw/1724/1726/99999/post"
+    item = DiscoveredItem(
+        source_record_id="99999",
+        official_url=url,
+        discovery_url=MojAuctionAdapter.LIST_URL,
+        title="普通重型機車拍賣公告",
+        metadata={"organization": "人工輸入機關"},
+    )
+    artifact = RawArtifact(
+        official_url=url,
+        fetched_at=datetime.now(UTC),
+        mime_type="text/html",
+        content=content,
+        checksum_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+    with pytest.raises(ValueError, match="title marker changed"):
+        parse_moj_auction_detail(item, [artifact])

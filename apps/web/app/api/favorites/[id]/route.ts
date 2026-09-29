@@ -19,10 +19,33 @@ async function mutate(id: string, method: "POST" | "DELETE") {
     return NextResponse.json({ error: "Invalid motorcycle id" }, { status: 400 });
   }
   const supabase = await createSupabaseServerClient();
-  const result = method === "POST"
-    ? await supabase.from("favorites").upsert({ user_id: viewer.id, vehicle_id: id })
-    : await supabase.from("favorites").delete().eq("user_id", viewer.id).eq("vehicle_id", id);
-  return result.error ? NextResponse.json({ error: result.error.message }, { status: 400 }) : new NextResponse(null, { status: 204 });
+  const { data: listing, error: listingError } = await supabase
+    .from("vehicle_marketplace_listing")
+    .select("id,listing_entity,lot_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (listingError) return NextResponse.json({ error: "目前無法確認收藏項目" }, { status: 503 });
+  if (!listing) return NextResponse.json({ error: "找不到這筆拍賣資料" }, { status: 404 });
+
+  if (method === "POST") {
+    const result = listing.listing_entity === "lot"
+      ? await supabase.from("favorites").insert({ user_id: viewer.id, lot_id: id })
+      : await supabase.from("favorites").insert({ user_id: viewer.id, vehicle_id: id });
+    if (result.error && result.error.code !== "23505") {
+      return NextResponse.json({ error: "收藏失敗，請稍後再試" }, { status: 400 });
+    }
+    return new NextResponse(null, { status: 204 });
+  }
+
+  const clauses = [`vehicle_id.eq.${id}`];
+  if (typeof listing.lot_id === "string") clauses.push(`lot_id.eq.${listing.lot_id}`);
+  const result = await supabase.from("favorites")
+    .delete()
+    .eq("user_id", viewer.id)
+    .or(clauses.join(","));
+  return result.error
+    ? NextResponse.json({ error: "取消收藏失敗，請稍後再試" }, { status: 400 })
+    : new NextResponse(null, { status: 204 });
 }
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) { return mutate((await params).id, "POST"); }

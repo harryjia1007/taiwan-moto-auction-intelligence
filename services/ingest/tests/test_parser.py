@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from ingest.models import BidEligibility, CarCategory, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass, VehicleType
+from ingest.models import AuctionStatus, BidEligibility, CarCategory, DiscoveredItem, FourState, RawArtifact, RegistrationStatus, VehicleClass, VehicleType
 from ingest.parser import car_category_from_official_text, integer, motorcycle_class_from_official_text, parse_judicial_record, parse_pcc_detail, parse_shwoo_detail, roc_compact_date, roc_datetime, vehicle_type_from_official_text
+from ingest.public_feed import public_listing_payload
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -120,6 +121,10 @@ def test_judicial_structured_record_preserves_unknown_price_and_exact_identity()
     assert record.registration_status == RegistrationStatus.UNKNOWN
     assert record.can_start == FourState.UNKNOWN
     assert all(ref.extraction_method == "STRUCTURED" for ref in record.evidence)
+    assert all(
+        ref.artifact_checksum_sha256 == source.checksum_sha256
+        for ref in record.evidence
+    )
 
 
 def test_judicial_unlabelled_brand_and_compact_manufacture_date() -> None:
@@ -197,6 +202,36 @@ def test_judicial_does_not_invent_round_and_preserves_explicit_fees() -> None:
     assert record.fee_notes == ["保證金新臺幣10,000元"]
 
 
+def test_judicial_missing_sale_date_is_announced_not_invented_as_scheduled() -> None:
+    row = {
+        "crtnm": "臺灣高雄地方法院",
+        "crm": "114司執字第000001號",
+        "ttitle": "普通重型機車",
+        "registeno": "普通重型機車",
+        "qty": "1",
+        "notes": "拍賣日期尚待官方確認。",
+    }
+    item = DiscoveredItem(
+        source_record_id="manual-ksd-missing-date",
+        official_url="https://aomp109.judicial.gov.tw/example.pdf",
+        title=row["ttitle"],
+        discovery_url="https://aomp109.judicial.gov.tw/judbp/wkw/WHD1A02.htm",
+    )
+    content = json.dumps(row, ensure_ascii=False).encode()
+    source = RawArtifact(
+        official_url=item.official_url,
+        fetched_at=datetime.fromisoformat("2026-08-09T00:00:00+00:00"),
+        mime_type="application/json",
+        content=content,
+        checksum_sha256=sha256(content).hexdigest(),
+    )
+
+    record = parse_judicial_record(item, source)
+
+    assert record.ends_at is None
+    assert record.status == AuctionStatus.ANNOUNCED
+
+
 def test_judicial_separable_multi_motorcycle_lot_preserves_each_plate() -> None:
     row = {
         "saledate": "1150806", "saleno": "1", "ttitle": "大型重機（775-FBL）、大型重機（AV-681）",
@@ -219,7 +254,8 @@ def test_judicial_separable_multi_motorcycle_lot_preserves_each_plate() -> None:
 
 
 def test_single_motorcycle_preserves_unknown_semantics() -> None:
-    record = parse_shwoo_detail(item(), artifact("shwoo_single.html"))
+    source = artifact("shwoo_single.html")
+    record = parse_shwoo_detail(item(), source)
     assert record.vehicle_type == VehicleType.MOTORCYCLE
     assert record.official_case_number == "115Y431240018"
     assert record.brand == "三陽牌"
@@ -235,6 +271,25 @@ def test_single_motorcycle_preserves_unknown_semantics() -> None:
     assert record.fuel_fee_arrears == FourState.UNKNOWN
     assert {identifier.identifier_type for identifier in record.identifiers} == {"PLATE", "ENGINE", "FRAME"}
     assert record.photo_urls
+    assert all(
+        evidence.artifact_checksum_sha256 == source.checksum_sha256
+        for evidence in record.evidence
+    )
+
+
+def test_shwoo_missing_auction_deadline_is_announced_not_invented_as_scheduled() -> None:
+    source = artifact("shwoo_single.html")
+    changed = source.content.decode().replace(
+        "<tr><td>拍賣開始與截止日</td><td>115/08/05~115/08/12 12:00:00</td></tr>",
+        "",
+    )
+    source.content = changed.encode()
+    source.checksum_sha256 = sha256(source.content).hexdigest()
+
+    record = parse_shwoo_detail(item(), source)
+
+    assert record.ends_at is None
+    assert record.status == AuctionStatus.ANNOUNCED
 
 
 def test_bulk_listing_creates_separable_vehicle_units() -> None:
@@ -271,6 +326,28 @@ def test_pcc_court_disposal_is_not_mislabeled_as_judicial_execution() -> None:
     assert record.registration_status == RegistrationStatus.SCRAP_ONLY
     assert record.disposal_origin == "SCRAP_DISPOSAL"
     assert record.bulk_lot is True  # The official page does not separate vehicle identities.
+    assert record.lot_size == 1  # Internal lower bound, not an official count.
+    assert not any(e.field_name == "lot_size" for e in record.evidence)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "普通重型機車一輛公開標售",
+        "普通重型機車壹輛公開標售",
+        "公開標售乙輛普通重型機車",
+    ],
+)
+def test_pcc_explicit_chinese_single_count_is_not_a_bulk_lot(title: str) -> None:
+    source = artifact("pcc_court_scrap.html")
+    source.content = source.content.replace("標售本院115年奉准報廢機車".encode(), title.encode())
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=single-chinese-count"
+
+    record = parse_pcc_detail(pcc_item("single-chinese-count", title), source)
+
+    assert record.lot_size == 1
+    assert record.bulk_lot is False
+    assert any(e.field_name == "lot_size" and e.normalized_value == 1 and e.source_text == title for e in record.evidence)
 
 
 def test_pcc_impounded_batch_preserves_count_and_origin() -> None:
@@ -279,11 +356,99 @@ def test_pcc_impounded_batch_preserves_count_and_origin() -> None:
     record = parse_pcc_detail(pcc_item("70020257", "逾期未領回汽機車"), source)
     assert record.disposal_origin == "IMPOUNDED_UNCLAIMED"
     assert record.vehicle_type == VehicleType.MIXED
-    assert record.lot_size == 11
+    assert record.lot_size == 15
     assert record.bulk_lot is True
     assert record.reserve_price == 134000
     assert record.deposit == 2500
     assert record.vehicle_units == []
+
+
+def test_pcc_explicit_zero_motorcycles_is_car_only_in_public_projection() -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=synthetic-zero-moto"
+    title = "標售逾期未領回車輛案(自小客車3輛、機車0輛)"
+
+    record = parse_pcc_detail(pcc_item("synthetic-zero-moto", title), source)
+    public = public_listing_payload(record, source_adapter="pcc")
+
+    assert record.vehicle_type == VehicleType.CAR
+    assert record.car_category == CarCategory.PASSENGER
+    assert record.vehicle_class == VehicleClass.UNKNOWN
+    assert record.lot_size == 3
+    assert record.bulk_lot is True
+    assert any(e.field_name == "vehicle_type" and e.source_text == title for e in record.evidence)
+    assert any(e.field_name == "lot_size" and e.normalized_value == 3 and e.source_text == title for e in record.evidence)
+    assert public["vehicle_type"] == "CAR"
+    assert public["car_category"] == "PASSENGER"
+    assert public["lot_size"] == 3
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_type", "expected_count"),
+    [
+        ("標售逾期未領回車輛案(自小客車0輛、普通重型機車2輛)", VehicleType.MOTORCYCLE, 2),
+        ("標售逾期未領回車輛案(自小客車3輛、機車1輛)", VehicleType.MIXED, 4),
+        ("標售逾期未領回汽機車案(自小客車3輛、機車0輛)", VehicleType.CAR, 3),
+        ("標售逾期未領回車輛案(3輛自小客車、機車零輛)", VehicleType.CAR, 3),
+        ("標售逾期未領回車輛案(自小客車3輛、零輛機車)", VehicleType.CAR, 3),
+    ],
+)
+def test_pcc_explicit_family_counts_do_not_invent_another_vehicle_type(
+    title: str, expected_type: VehicleType, expected_count: int,
+) -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    source.content = source.content.replace(
+        "標售逾期未領回車輛案(自小客車3輛、機車0輛)".encode(), title.encode(),
+    )
+    source.checksum_sha256 = sha256(source.content).hexdigest()
+
+    record = parse_pcc_detail(pcc_item("synthetic-counted-lot", title), source)
+
+    assert record.vehicle_type == expected_type
+    assert record.lot_size == expected_count
+
+
+def test_pcc_uncounted_additional_motorcycles_keep_total_unconfirmed() -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    title = "標售逾期未領回車輛案(自小客車3輛、機車0輛，另有機車一批)"
+    source.content = source.content.replace(
+        "標售逾期未領回車輛案(自小客車3輛、機車0輛)".encode(), title.encode(),
+    )
+
+    record = parse_pcc_detail(pcc_item("synthetic-uncounted-lot", title), source)
+
+    assert record.vehicle_type == VehicleType.MIXED
+    assert record.bulk_lot is True
+    assert not any(e.field_name == "lot_size" for e in record.evidence)
+
+
+def test_pcc_exhaustive_zero_vehicle_title_fails_closed() -> None:
+    source = artifact("pcc_zero_motorcycles.html")
+    title = "標售逾期未領回車輛案(自小客車0輛、機車0輛)"
+    source.content = source.content.replace(
+        "標售逾期未領回車輛案(自小客車3輛、機車0輛)".encode(), title.encode(),
+    )
+
+    with pytest.raises(ValueError, match="zero vehicles"):
+        parse_pcc_detail(pcc_item("synthetic-no-vehicles", title), source)
+
+
+def test_pcc_compatibility_glyph_scrap_mixed_lot_stays_out_of_regular_market() -> None:
+    source = artifact("pcc_court_scrap.html")
+    source.content = source.content.replace(
+        "標售本院115年奉准報廢機車".encode(),
+        "報廢警用汽⾞3輛、機⾞10輛".encode(),
+    )
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=test-scrap-glyphs"
+
+    record = parse_pcc_detail(pcc_item("test-scrap-glyphs", "報廢警用汽⾞3輛、機⾞10輛"), source)
+
+    assert record.vehicle_type == VehicleType.MIXED
+    assert record.lot_size == 13
+    assert record.bulk_lot is True
+    assert record.registration_status == RegistrationStatus.SCRAP_ONLY
+    assert record.disposal_origin == "SCRAP_DISPOSAL"
+    assert any(e.field_name == "lot_size" and e.source_text == record.official_title for e in record.evidence)
 
 
 def test_pcc_mixed_scrap_title_and_ten_thousand_deposit_are_not_lost() -> None:
@@ -300,6 +465,17 @@ def test_pcc_mixed_scrap_title_and_ten_thousand_deposit_are_not_lost() -> None:
     assert record.registration_status == RegistrationStatus.SCRAP_ONLY
     assert record.disposal_origin == "SCRAP_DISPOSAL"
     assert record.deposit == 16000
+
+
+def test_pcc_missing_deadline_is_announced_not_invented_as_scheduled() -> None:
+    source = artifact("pcc_court_scrap.html")
+    source.content = source.content.replace("截止投標".encode(), "未知截止欄位".encode())
+    source.official_url = "https://web.pcc.gov.tw/opas/aspam/public/readOneAspamDetailOld?pk=missing-deadline"
+
+    record = parse_pcc_detail(pcc_item("missing-deadline", "標售報廢機車"), source)
+
+    assert record.ends_at is None
+    assert record.status == AuctionStatus.ANNOUNCED
 
 
 def test_fee_and_deadline_fields_are_evidenced() -> None:

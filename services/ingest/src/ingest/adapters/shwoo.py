@@ -11,7 +11,14 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.adapters.base import SourceAdapter, contact_user_agent, enforce_http_status
+from ingest.adapters.base import (
+    LiveRobotsPolicy,
+    SourceAccessDenied,
+    SourceAdapter,
+    SourceRateLimited,
+    contact_user_agent,
+    enforce_http_status,
+)
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SourceHealth
 from ingest.parser import parse_shwoo_detail
 
@@ -20,6 +27,7 @@ class ShwooAdapter(SourceAdapter):
     BASE_URL = "https://shwoo.gov.taipei"
     BROWSE_URL = f"{BASE_URL}/shwoo/browse/browse00/"
     RESULTS_URL = f"{BASE_URL}/shwoo/newproduct/newproduct00/bidresult"
+    ROBOTS_URL = f"{BASE_URL}/robots.txt"
     ALLOWED_HOSTS = {"shwoo.gov.taipei"}
     KEYWORDS = (
         "機車", "機器腳踏車", "普通輕型機車", "普通重型機車",
@@ -27,21 +35,29 @@ class ShwooAdapter(SourceAdapter):
         "汽車", "小客車", "貨車", "客貨兩用車", "休旅車", "轎車", "廂型車",
     )
     MAX_BYTES = 25 * 1024 * 1024
+    HEALTHCHECK_TIMEOUT_SECONDS = 30
     ALLOWED_MIME = ("text/html", "image/jpeg", "image/png", "image/webp")
 
     def __init__(self, client: httpx.AsyncClient | None = None, request_interval: float = 1.0) -> None:
+        user_agent = contact_user_agent("0.5")
         self.client = client or httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             # The municipal server can take longer than 20 seconds under load.
             # Keep bounded connect/write limits while allowing a slower official
             # HTML response to complete instead of restarting the whole run.
             timeout=httpx.Timeout(60, connect=15, write=20, pool=20),
-            headers={"User-Agent": contact_user_agent("0.4")},
+            headers={"User-Agent": user_agent},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
+        self.discovery_warnings: list[str] = []
         self._last_request = 0.0
         self._request_lock = asyncio.Lock()
+        self._robots = LiveRobotsPolicy(
+            self.ROBOTS_URL,
+            allowed_host="shwoo.gov.taipei",
+            user_agent=user_agent,
+        )
 
     async def close(self) -> None:
         if self._owns_client:
@@ -54,6 +70,7 @@ class ShwooAdapter(SourceAdapter):
 
     async def _request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
         self._validate_url(url)
+        await self._robots.ensure_allowed(self.client, url)
         last_error: Exception | None = None
         for attempt in range(3):
             async with self._request_lock:
@@ -61,13 +78,41 @@ class ShwooAdapter(SourceAdapter):
                 if delay > 0:
                     await asyncio.sleep(delay)
                 try:
-                    response = await self.client.request(method, url, **kwargs)
-                    self._last_request = time.monotonic()
+                    current_method = method.upper()
+                    current_url = url
+                    request_kwargs = dict(kwargs)
+                    request_kwargs.pop("follow_redirects", None)
+                    for _ in range(6):
+                        response = await self.client.request(
+                            current_method,
+                            current_url,
+                            follow_redirects=False,
+                            **request_kwargs,
+                        )
+                        self._last_request = time.monotonic()
+                        if not response.is_redirect:
+                            break
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ValueError("Shwoo redirect response did not include a location")
+                        current_url = urljoin(str(response.url), location)
+                        self._validate_url(current_url)
+                        self._robots.require_allowed(current_url)
+                        if response.status_code in {301, 302, 303} and current_method != "HEAD":
+                            current_method = "GET"
+                            for key in ("data", "json", "content", "files"):
+                                request_kwargs.pop(key, None)
+                    else:
+                        raise ValueError("Shwoo redirect limit exceeded")
                     enforce_http_status(response)
+                    self._validate_url(str(response.url))
+                    self._robots.require_allowed(str(response.url))
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response
-                except (httpx.HTTPError, ValueError) as exc:
+                except (SourceAccessDenied, SourceRateLimited, ValueError):
+                    raise
+                except httpx.HTTPError as exc:
                     last_error = exc
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)
@@ -106,6 +151,8 @@ class ShwooAdapter(SourceAdapter):
         return list(found.values())
 
     async def discover(self) -> list[DiscoveredItem]:
+        self.discovery_warnings.clear()
+        self._robots.reset()
         landing = await self._request("GET", self.BROWSE_URL)
         soup = BeautifulSoup(landing.content, "html.parser")
         form = soup.select_one("form#autionId") or soup.find("form")
@@ -124,8 +171,14 @@ class ShwooAdapter(SourceAdapter):
                     })
                 except httpx.TimeoutException:
                     # One slow keyword response must not discard listings already
-                    # discovered from the other official search variants. Policy
-                    # errors (403/429) still propagate and fail closed.
+                    # discovered from the other official search variants. The
+                    # incomplete search must still keep the run PARTIAL, never
+                    # advance its last-successful timestamp. Policy errors
+                    # (403/429) still propagate and fail closed.
+                    eligibility = "recycler-only" if recycler_only else "unrestricted"
+                    self.discovery_warnings.append(
+                        f"Shwoo {eligibility} search timed out for keyword {keyword}"
+                    )
                     continue
                 for item in self._detail_items(response.content, str(response.url), recycler_only):
                     discovered[item.source_record_id] = item
@@ -146,8 +199,11 @@ class ShwooAdapter(SourceAdapter):
                 for item in self._detail_items(result_page.content, str(result_page.url), False, True):
                     if any(candidate in item.title for candidate in self.KEYWORDS):
                         discovered.setdefault(item.source_record_id, item)
-        except httpx.HTTPError:
-            pass
+        except httpx.HTTPError as exc:
+            self.discovery_warnings.append(
+                "Shwoo completed-result search was incomplete "
+                f"({type(exc).__name__}); prior results were retained"
+            )
         return list(discovered.values())
 
     @staticmethod
@@ -192,7 +248,9 @@ class ShwooAdapter(SourceAdapter):
     async def healthcheck(self) -> SourceHealth:
         start = time.monotonic()
         try:
-            response = await self._request("GET", self.BROWSE_URL)
+            self._robots.reset()
+            async with asyncio.timeout(self.HEALTHCHECK_TIMEOUT_SECONDS):
+                response = await self._request("GET", self.BROWSE_URL)
             text = response.text
             healthy = "物品瀏覽" in text and "autionId" in text
             return SourceHealth(
@@ -202,8 +260,9 @@ class ShwooAdapter(SourceAdapter):
                 warnings=[] if healthy else ["Expected discovery form was not found"],
             )
         except Exception as exc:
+            warning = str(exc).strip() or type(exc).__name__
             return SourceHealth(
                 source="shwoo", status="DEGRADED", checked_at=datetime.now(UTC),
                 response_ms=round((time.monotonic() - start) * 1000),
-                message="Public discovery page is unavailable", warnings=[str(exc)],
+                message="Public discovery page is unavailable", warnings=[warning],
             )

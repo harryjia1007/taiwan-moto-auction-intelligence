@@ -5,6 +5,8 @@ import { formatMoney, isEndedAuction, type Motorcycle } from "@tm-ai/shared";
 import { disposalOriginLabels, eligibilityLabels, fourStateLabels, motorcycleClassLabels, registrationLabels } from "@/lib/labels";
 import { FavoriteButton } from "./favorite-button";
 import { PhotoGallery } from "./photo-gallery";
+import { CompareButton } from "./comparison-provider";
+import { isComparisonEligibleListing } from "@/lib/comparison";
 
 const vehicleTypeLabels = { MOTORCYCLE: "機車", CAR: "汽車", MIXED: "汽機車混合批次", UNKNOWN: "車種未確認" } as const;
 const carCategoryLabels = { PASSENGER: "小客車／轎車", SUV: "休旅車", VAN: "廂型／客貨車", TRUCK: "貨車", BUS: "大客車／遊覽車", OTHER: "其他汽車", UNKNOWN: "汽車類別未確認" } as const;
@@ -53,9 +55,10 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
   const registrationTone = ["SCRAP_ONLY", "CANNOT_RELICENSE"].includes(motorcycle.registrationStatus) ? "danger" : motorcycle.registrationStatus === "NORMAL_TRANSFER" ? "good" : "warn";
   const gateLabels = new Set([eligibilityLabels[motorcycle.bidEligibility], registrationLabels[motorcycle.registrationStatus]]);
   const secondaryRisks = motorcycle.riskBadges.filter((risk) => !gateLabels.has(risk));
+  const comparisonSupported = isComparisonEligibleListing(motorcycle);
 
   return <Card className={`moto-card ${photoCount > 0 ? "has-official-photo" : "no-official-photo"}`}>
-    <div className="card-image">
+    {photoCount > 0 && <div className="card-image">
       <PhotoGallery
         images={cachedImages}
         name={motorcycle.name}
@@ -67,12 +70,18 @@ export function MotorcycleCard({ motorcycle }: { motorcycle: Motorcycle }) {
         href={href}
         variant="card"
       />
-      {photoCount > 0 && <span className={`auction-state ${deadline.urgency}`}>{deadline.label}</span>}
-      {photoCount > 0 && <span className="photo-count"><Camera size={14}/>{photoCount} 張官方照片</span>}
-      {motorcycle.favoriteSupported && <FavoriteButton id={motorcycle.id} initial={motorcycle.favorite} />}
-    </div>
+      <span className={`auction-state ${deadline.urgency}`}>{deadline.label}</span>
+      <span className="photo-count"><Camera size={14}/>{photoCount} 張官方照片</span>
+    </div>}
     <div className="card-body">
-      <div className="source-line"><span><ShieldCheck size={13}/> {motorcycle.sourceName}</span><span>{motorcycle.county ?? "地區未確認"}</span></div>
+      <div className="card-topline">
+        <div className="source-line"><span><ShieldCheck size={13}/> {motorcycle.sourceName}</span><span>{motorcycle.county ?? "地區未確認"}</span></div>
+        <div className="card-topline-actions">
+          {comparisonSupported && <CompareButton id={motorcycle.id} name={motorcycle.name} />}
+          {motorcycle.favoriteSupported && <FavoriteButton id={motorcycle.id} initial={motorcycle.favorite} variant="compact" />}
+        </div>
+      </div>
+      {photoCount === 0 && motorcycle.mediaState === "UNAVAILABLE" && <p className="media-unavailable" role="status">照片暫時無法載入；不代表官方未提供</p>}
       <h2 className="card-title"><Link href={href}>{motorcycle.name}</Link></h2>
       <p className="agency">{motorcycle.organization}</p>
 

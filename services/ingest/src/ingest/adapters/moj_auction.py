@@ -12,7 +12,7 @@ import httpx
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from ingest.adapters.base import SourceAdapter, contact_user_agent, enforce_http_status
+from ingest.adapters.base import LiveRobotsPolicy, SourceAdapter, contact_user_agent, enforce_http_status
 from ingest.models import DiscoveredItem, ParsedAuctionRecord, RawArtifact, SourceHealth
 from ingest.parser import parse_moj_auction_detail
 
@@ -30,6 +30,7 @@ class MojAuctionAdapter(SourceAdapter):
 
     ORIGIN = "https://auction.moj.gov.tw"
     LIST_URL = f"{ORIGIN}/1724/1726/searchList"
+    ROBOTS_URL = f"{ORIGIN}/robots.txt"
     ALLOWED_HOSTS = {"auction.moj.gov.tw"}
     MAX_BYTES = 25 * 1024 * 1024
     MAX_PAGES = 10
@@ -51,16 +52,23 @@ class MojAuctionAdapter(SourceAdapter):
     )
 
     def __init__(self, client: httpx.AsyncClient | None = None, request_interval: float = 1.0) -> None:
+        user_agent = contact_user_agent("0.5")
         self.client = client or httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(25),
-            headers={"User-Agent": contact_user_agent("0.4")},
+            headers={"User-Agent": user_agent},
         )
         self._owns_client = client is None
         self.request_interval = request_interval
         self._last_request = 0.0
         self._request_lock = asyncio.Lock()
         self._central_summary_artifacts: dict[str, RawArtifact] = {}
+        self.discovery_warnings: list[str] = []
+        self._robots = LiveRobotsPolicy(
+            self.ROBOTS_URL,
+            allowed_host="auction.moj.gov.tw",
+            user_agent=user_agent,
+        )
 
     async def close(self) -> None:
         if self._owns_client:
@@ -92,6 +100,7 @@ class MojAuctionAdapter(SourceAdapter):
 
     async def _request(self, url: str) -> httpx.Response:
         self._validate_url(url)
+        await self._robots.ensure_allowed(self.client, url)
         last_error: Exception | None = None
         for attempt in range(3):
             async with self._request_lock:
@@ -120,10 +129,12 @@ class MojAuctionAdapter(SourceAdapter):
                             # central portal redirects there. Each host needs a
                             # separately reviewed access policy.
                             raise MojExternalDetailBlocked(current_url) from exc
+                        self._robots.require_allowed(current_url)
                     else:
                         raise ValueError("MOJ redirect limit exceeded")
                     enforce_http_status(response)
                     self._validate_url(str(response.url))
+                    self._robots.require_allowed(str(response.url))
                     if len(response.content) > self.MAX_BYTES:
                         raise ValueError(f"Artifact exceeds {self.MAX_BYTES} bytes")
                     return response
@@ -209,7 +220,9 @@ class MojAuctionAdapter(SourceAdapter):
         )
 
     async def discover(self) -> list[DiscoveredItem]:
+        self._robots.reset()
         self._central_summary_artifacts.clear()
+        self.discovery_warnings = []
         found: dict[str, DiscoveredItem] = {}
         for page in range(1, self.MAX_PAGES + 1):
             url = f"{self.LIST_URL}?{urlencode({'Page': page, 'PageSize': self.PAGE_SIZE, 'type': '01'})}"
@@ -227,8 +240,13 @@ class MojAuctionAdapter(SourceAdapter):
                         response, item, raw_row, fetched_at
                     )
             soup = BeautifulSoup(response.content, "html.parser")
-            if not soup.select_one(f"ul.page a[href*='Page={page + 1}']"):
+            has_next = bool(soup.select_one(f"ul.page a[href*='Page={page + 1}']"))
+            if not has_next:
                 break
+            if page == self.MAX_PAGES:
+                self.discovery_warnings.append(
+                    f"MOJ auction list reached the {self.MAX_PAGES}-page safety bound while an official next page still existed"
+                )
         return sorted(found.values(), key=lambda item: item.source_record_id)
 
     @staticmethod
@@ -266,6 +284,15 @@ class MojAuctionAdapter(SourceAdapter):
                 f"has no reviewed automated-access policy: {exc.target_url}"
             )
             return [summary]
+        except httpx.HTTPError as exc:
+            summary = self._central_summary_artifacts.get(item.source_record_id)
+            if not summary:
+                raise
+            item.metadata[self.PARTIAL_FAILURE_KEY] = (
+                "Central MOJ list summary retained because the reviewed detail request failed after bounded "
+                f"retries: {type(exc).__name__}"
+            )
+            return [summary]
         artifacts = [self._artifact(primary, fetched_at)]
         if artifacts[0].mime_type != "text/html":
             return artifacts
@@ -278,8 +305,25 @@ class MojAuctionAdapter(SourceAdapter):
             url = urljoin(str(primary.url), relative)
             if url not in urls and urlparse(url).hostname in self.ALLOWED_HOSTS:
                 urls.append(url)
+        if len(urls) > self.MAX_ATTACHMENTS:
+            item.metadata[self.PARTIAL_FAILURE_KEY] = (
+                f"Official detail linked {len(urls)} supporting files; only the first "
+                f"{self.MAX_ATTACHMENTS} were checked under the safety bound"
+            )
         for url in urls[: self.MAX_ATTACHMENTS]:
-            artifacts.append(self._artifact(await self._request(url), fetched_at))
+            try:
+                artifacts.append(self._artifact(await self._request(url), fetched_at))
+            except (httpx.HTTPError, ValueError) as exc:
+                # The already-preserved official detail remains useful evidence.
+                # Stop trying further files so a failing endpoint is not hit
+                # repeatedly during one record, and report incomplete media.
+                warning = (
+                    "Official detail HTML retained; a supporting file was not preserved "
+                    f"({type(exc).__name__}); remaining files were not requested"
+                )
+                previous = str(item.metadata.get(self.PARTIAL_FAILURE_KEY) or "")
+                item.metadata[self.PARTIAL_FAILURE_KEY] = "; ".join(filter(None, (previous, warning)))
+                break
         return artifacts
 
     async def parse(self, item: DiscoveredItem, artifacts: list[RawArtifact]) -> ParsedAuctionRecord:
@@ -288,6 +332,7 @@ class MojAuctionAdapter(SourceAdapter):
     async def healthcheck(self) -> SourceHealth:
         start = time.monotonic()
         try:
+            self._robots.reset()
             response = await self._request(f"{self.LIST_URL}?Page=1&PageSize=30&type=01")
             ok = "查扣物查詢" in response.text and "汽、機車類" in response.text
             return SourceHealth(

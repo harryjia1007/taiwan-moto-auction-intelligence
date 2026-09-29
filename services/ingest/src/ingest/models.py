@@ -74,14 +74,22 @@ class AuctionStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
-class DiscoveredItem(BaseModel):
-    source_record_id: str
-    official_url: HttpUrl
-    title: str
-    discovery_url: HttpUrl
-    recycler_only: bool = False
-    result_record: bool = False
-    metadata: dict[str, Any] = Field(default_factory=dict)
+class SourceTrust(StrEnum):
+    OFFICIAL_EXPLICIT = "OFFICIAL_EXPLICIT"
+    OFFICIAL_INFERRED = "OFFICIAL_INFERRED"
+    CROSS_SOURCE_CONFIRMED = "CROSS_SOURCE_CONFIRMED"
+    SYSTEM_CALCULATED = "SYSTEM_CALCULATED"
+    LLM_EXTRACTED = "LLM_EXTRACTED"
+    THIRD_PARTY_REFERENCE = "THIRD_PARTY_REFERENCE"
+    UNKNOWN = "UNKNOWN"
+
+
+class ExtractionMethod(StrEnum):
+    STRUCTURED = "STRUCTURED"
+    HTML = "HTML"
+    DOCUMENT_RULE = "DOCUMENT_RULE"
+    OCR = "OCR"
+    LLM = "LLM"
 
 
 class RawArtifact(BaseModel):
@@ -92,17 +100,29 @@ class RawArtifact(BaseModel):
     content: bytes = Field(repr=False)
     http_status: int = 200
     http_headers: dict[str, str] = Field(default_factory=dict)
-    checksum_sha256: str
+    checksum_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class DiscoveredItem(BaseModel):
+    source_record_id: str
+    official_url: HttpUrl
+    title: str
+    discovery_url: HttpUrl
+    recycler_only: bool = False
+    result_record: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    discovery_artifacts: list[RawArtifact] = Field(default_factory=list, repr=False)
 
 
 class EvidenceRef(BaseModel):
     field_name: str
     normalized_value: Any
     source_text: str
-    extraction_method: str = "HTML"
-    trust: str = "OFFICIAL_EXPLICIT"
+    extraction_method: ExtractionMethod = ExtractionMethod.HTML
+    trust: SourceTrust = SourceTrust.OFFICIAL_EXPLICIT
     confidence: float = Field(default=1.0, ge=0, le=1)
     table_row: str | None = None
+    artifact_checksum_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class VehicleIdentifier(BaseModel):

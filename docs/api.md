@@ -4,20 +4,22 @@ All routes require a valid Supabase session belonging to `OWNER_EMAIL`. Unauthen
 
 ## `GET /api/motorcycles`
 
-Returns `{ items, nextCursor, total }`. `total` is the exact count before pagination. `nextCursor` is an opaque, versioned keyset cursor bound to the selected sort and should be passed back unchanged. Invalid or sort-mismatched cursors restart from the first page. The default page size is 24 and `limit` is clamped to 1–100.
+Returns `{ items, nextCursor, total, displacementFacetCounts }`. `total` is the exact count before pagination. `displacementFacetCounts` reports every fixed motorcycle CC band under the other active filters. `nextCursor` is an opaque, versioned keyset cursor bound to the selected sort and should be passed back unchanged. Invalid, unsafe, or sort-mismatched cursors restart from the first page. The default page size is 24; an integer `limit` is clamped to 1–100 and a non-integer value falls back to the default.
 
 | Query | Type | Meaning |
 | --- | --- | --- |
 | `cursor` | string | Cursor returned by the previous page |
 | `limit` | integer | Page size |
 | `keyword` | string | Normalized title, brand, model, plate, agency, and location search |
-| `source` | string | Adapter key: `judicial`, `moj_auction`, `moj_enforcement`, `pcc`, or `shwoo` |
+| `source` | string | Adapter key: `judicial`, `judicial_notices`, `moj_auction`, `moj_enforcement`, `moj_enforcement_cms`, `customs`, `pcc`, or `shwoo` |
 | `origin` | enum | Shared `DisposalOrigin` value |
 | `county` | string | Taiwan county/city label |
 | `brand` | string | Normalized brand |
 | `eligibility` | enum | Shared `BidEligibility` value |
 | `registration` | enum | Shared `RegistrationStatus` value |
 | `vehicleClass` | enum | Official class: ordinary light/heavy, large heavy, electric, heavy-unspecified, or unknown |
+| `vehicleType` | enum | `MOTORCYCLE`, `CAR`, `MIXED`, or `UNKNOWN` |
+| `carCategory` | enum | Car-only category; selecting one safely implies `vehicleType=CAR` |
 | `cc` | repeatable enum | `le-125`, `126-150`, `151-250`, `251-550`, `gt-550`, or `unknown`; repeat the key for multi-select |
 | `hasPhotos` | boolean | Require an available cached photo |
 | `singleVehicle` | boolean | Exclude bulk lots |

@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { imageSourcePolicy } from "@/lib/content-security-policy";
 
 export async function middleware(request: NextRequest) {
   const publicPath = request.nextUrl.pathname === "/login" || request.nextUrl.pathname.startsWith("/auth/") || request.nextUrl.pathname === "/api/health" || request.nextUrl.pathname === "/demo" || request.nextUrl.pathname.startsWith("/legal/");
@@ -12,7 +13,8 @@ export async function middleware(request: NextRequest) {
     target.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
     target.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
     const devEval = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
-    target.headers.set("Content-Security-Policy", `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'${devEval}; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`);
+    const imageSources = imageSourcePolicy(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NODE_ENV === "production");
+    target.headers.set("Content-Security-Policy", `default-src 'self'; img-src ${imageSources}; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'${devEval}; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`);
     target.headers.set("Cache-Control", request.nextUrl.pathname === "/demo" || request.nextUrl.pathname.startsWith("/legal/") ? "public, max-age=300, stale-while-revalidate=3600" : "private, no-store");
     if (!publicPath) target.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
     return target;

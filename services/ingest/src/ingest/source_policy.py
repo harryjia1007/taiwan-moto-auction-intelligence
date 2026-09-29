@@ -37,8 +37,10 @@ SOURCE_POLICIES = {
         "list-row evidence is retained as a partial record.",
     ),
     "moj_enforcement": SourceAccessPolicy(
-        "moj_enforcement", AccessDecision.MANUAL_ONLY, "https://www.tpkonsale.moj.gov.tw/", date(2026, 8, 15),
-        "Discovery requires a human-completed CAPTCHA; only validated detail manifests may be processed.",
+        "moj_enforcement", AccessDecision.MANUAL_ONLY, "https://www.tpkonsale.moj.gov.tw/robots.txt", date(2026, 8, 21),
+        "The official search form requires CAPTCHA. A direct result GET without a CAPTCHA session is not treated as "
+        "permission or used by this project; only offline human-exported result HTML or validated detail manifests "
+        "may seed same-host detail imports.",
     ),
     "moj_enforcement_cms": SourceAccessPolicy(
         "moj_enforcement_cms", AccessDecision.ALLOW,
@@ -65,6 +67,11 @@ SOURCE_POLICIES = {
         "but the former movable-auction dataset 49107 was permanently withdrawn and its legacy JSON is unavailable; "
         "human-reviewed official PDF manifests may be imported without querying or mirroring the blocked site. "
         "Unattended discovery stays disabled until a replacement official feed or written access path exists.",
+    ),
+    "judicial_notices": SourceAccessPolicy(
+        "judicial_notices", AccessDecision.ALLOW, "https://www.judicial.gov.tw/robots.txt", date(2026, 8, 23),
+        "This supplemental source is limited to www.judicial.gov.tw other-judicial-notice list/detail HTML after "
+        "a fresh robots check. It does not contact aomp109, and official attachment URLs are linked without fetching.",
     ),
 }
 
