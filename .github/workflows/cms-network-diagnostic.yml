@@ -1,0 +1,29 @@
+name: CMS network diagnostic (temporary)
+
+on:
+  push:
+    branches:
+      - codex/official-source-release-20260823
+
+permissions:
+  contents: read
+
+jobs:
+  robots-connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Bounded IPv4 and IPv6 preflight to one official robots URL
+        shell: bash
+        run: |
+          set -u
+          for family in 4 6; do
+            result=$(curl "-$family" --silent --output /dev/null \
+              --max-time 8 --connect-timeout 5 \
+              --write-out '%{http_code} %{time_namelookup} %{time_connect}' \
+              https://www.tpy.moj.gov.tw/robots.txt 2>/dev/null)
+            exit_code=$?
+            printf 'ip_family=%s curl_exit=%s status_dns_connect=%s\n' \
+              "$family" "$exit_code" "$result"
+            sleep 1
+          done
