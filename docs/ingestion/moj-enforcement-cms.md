@@ -24,7 +24,8 @@
 - 只有官方明確寫出普通輕型、普通重型、大型重型或電動機車時才設定法定級別；排氣量不反推級別。
 - 日期、底價、車牌、廠牌、型號、鑰匙、可發動、過戶與報廢限制都只從 HTML 明文正規化。PDF 目前先保留，不以未解析附件內容補值。
 - 「無法測試」不等於「無法發動」；未知值維持 `UNKNOWN`。
-- generic 車輛公告是一個 lot，不建立虛構的單車 vehicle row。只列多個車牌但沒有逐車規格配對時也維持 bulk lot，不把一段共享品牌、年份或排氣量複製到多台車。
+- generic 車輛公告是一個 lot，不建立虛構的單車 vehicle row。
+- 多車牌或整批公告只保留原文與 lot 層級車牌；共用描述中的廠牌、型號、年份、排氣量、顏色、法定級別、鑰匙／發動／測試、領牌狀態和車況都不當成每輛車的共同事實，正規化欄位保持未知。拍賣日期、價格與投標資格仍是 lot 層級資訊。
 
 ## 已知缺口與目前整合狀態
 
@@ -32,8 +33,12 @@
 
 adapter 程式與 fixture tests 位於 `services/ingest/src/ingest/adapters/moj_enforcement_cms.py` 與 `services/ingest/tests/test_moj_enforcement_cms_adapter.py`。來源政策、獨立 source UUID、repository mapping、CLI、同步警告、公開投影與每日兩次排程已設定；它不覆寫既有 CAPTCHA 人工來源。2026-09-25 的本機唯讀驗證顯示 13/13 分署預檢成功；一次有界 discovery 找到 5 筆車輛候選（臺中 3、屏東 2），並產生 21 個涵蓋警告，其中多個「動產拍賣公告」入口實際是連外或無日期列的導覽頁，不能當成已完整檢查的案件清單。臺中其中一筆可保存官方 HTML 並完成解析；這些只是本機讀取結果，正式 GitHub 排程仍須以修正後的新 run 驗證。個別分署失敗時 run 維持 `PARTIAL`，全部分署都無法安全檢查時整次失敗，既有正式資料不會被當成零案件清除。即使一次正式唯讀同步成功，也只能代表當次可讀的 CMS 公告清單，不代表中央 CAPTCHA 清單或全國所有車輛拍賣已完整涵蓋。
 
+正式公開寫入器在建立 sync run 前，會要求託管資料庫恰有一筆此來源的 `source_access_policies`，且決策為 `ALLOW`；缺失、重複、未授權或查詢失敗均停止、關閉 adapter 與 publisher 連線，不會呼叫不存在 run 的完成程序，也不會在失敗時退回程式內較舊的授權決策。這是發布前授權檢查，不代表來源連線或正式同步已成功。
+
 2026-09-25 的 GitHub-hosted 正式同步在 13 站都留下空白的 branch-discovery 例外訊息，無法從舊紀錄判定失敗類別；臺灣本機的單站健康檢查可通過，但這不等於 GitHub 排程已修復。後續分署層級的失敗診斷只記錄固定階段（`robots`、`sitemap`、`homepage`、`list_discovery`、`announcement_list`、`generic_detail`）與例外類別，不記錄原始例外文字、案件內容或來源網址。這項變更僅改善定位能力，不放寬 robots、CAPTCHA、網域、重試、速率或失敗時保留既有資料的邊界；確認 GitHub runner 的實際失敗原因後才決定下一步。
 
 2026-09-29 的無密鑰 GitHub-hosted 短測只讀取臺北分署 `robots.txt`：Linux 強制 IPv4 時 DNS 已解析但 TCP 連線在 5 秒內未建立，強制 IPv6 也無法連線；macOS runner 的 IPv4 亦在 8 秒內無法建立 TCP 連線。這排除了「只要強制 IPv4 或改用 GitHub macOS runner 就可修好」的假設，仍不能推論來源有意封鎖雲端或 GCP 臺灣區必然可用。當天多個本機 preflight 不慎同時執行，結果不一致；後續官方站診斷必須單一、低頻、有限時，不可反覆重試到成功。正式來源尚未同步任何 CMS 案件。
+
+同日臺灣本機另一次受控 IPv4 單次請求對臺北分署 `robots.txt` 收到 HTTP 302（TCP 建立約 0.147 秒，整次約 1.864 秒）。這只證明當時該機器可連上第一跳，沒有證明導向後的 robots 規則、13 分署發現、正式寫入或排程可行。
 
 同日查核官方替代管道，本次未找到可由 GitHub 排程無驗證碼完整提供 13 分署車輛案件的正式 API／資料集。[中央拍賣系統操作手冊](https://www.tpkonsale.moj.gov.tw/File/GetOperationManual)所示動產查詢使用驗證碼；政府開放資料平臺可核對的[行政執行署拍賣資料集](https://data.gov.tw/dataset/177921)是已拍定不動產且不定期更新；[法務部 RSS](https://www.moj.gov.tw/2807/2816/)不是車輛標的 feed。這些來源都不得被冒充為 CMS 案件同步或用來推定目前沒有車輛。後續可向[行政執行署](https://www.tpk.moj.gov.tw/)或透過[政府資料開放提案](https://data.gov.tw/suggests)申請核准的機器可讀介接。

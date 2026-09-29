@@ -1100,39 +1100,117 @@ async def test_generic_vehicle_notice_remains_an_unknown_bulk_lot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_multi_plate_cms_notice_does_not_clone_shared_specs_into_vehicle_rows() -> None:
+async def test_multi_plate_notice_keeps_shared_specs_on_unseparated_lot() -> None:
     content = """<html><head>
       <meta name='ContentTitle' content='普通重型機車二輛拍賣公告'>
       <meta name='DC.Creator' content='行政執行署臺中分署'>
       </head><body><section class='cp'>
       普通重型機車，車牌 AAA-111、BBB-222，廠牌測試牌，排氣量125cc。
       </section></body></html>""".encode()
-    url = "https://www.tcy.moj.gov.tw/9103/9127/9129/1766001/post"
+    url = f"{BRANCH.origin}/9103/9127/9129/1766001/post"
     item = DiscoveredItem(
-        source_record_id="tcy-1766001",
-        official_url=url,
-        discovery_url="https://www.tcy.moj.gov.tw/9103/9127/9129/",
+        source_record_id="tcy-1766001", official_url=url,
+        discovery_url=f"{BRANCH.origin}/9103/9127/9129/",
         title="普通重型機車二輛拍賣公告",
         metadata={"organization": BRANCH.organization},
     )
     artifact = RawArtifact(
-        official_url=url,
-        fetched_at=datetime.now(UTC),
-        mime_type="text/html",
-        filename="post",
-        content=content,
+        official_url=url, fetched_at=datetime.now(UTC), mime_type="text/html",
+        filename="post", content=content,
         checksum_sha256=hashlib.sha256(content).hexdigest(),
     )
-    adapter = MojEnforcementCmsAdapter(
-        branches=(BRANCH,), request_interval=0,
-        now=lambda: datetime(2026, 8, 18, tzinfo=TAIPEI),
+    adapter = MojEnforcementCmsAdapter(branches=(BRANCH,), request_interval=0)
+    try:
+        parsed = await adapter.parse(item, [artifact])
+    finally:
+        await adapter.close()
+
+    assert [identifier.original_value for identifier in parsed.identifiers] == ["AAA-111", "BBB-222"]
+    assert parsed.lot_size == 2
+    assert parsed.bulk_lot is True
+    assert parsed.vehicle_units == []
+    assert parsed.brand is None
+    assert parsed.model is None
+    assert parsed.manufacture_year is None
+    assert parsed.displacement_cc is None
+    assert "125cc" in (parsed.description or "")
+
+
+@pytest.mark.asyncio
+async def test_explicit_bulk_notice_does_not_assign_shared_specs_to_single_plate() -> None:
+    content = """<html><head>
+      <meta name='ContentTitle' content='機車整批拍賣公告'>
+      </head><body><section class='cp'>
+      整批機車與零件，車牌 AAA-111，廠牌測試牌，排氣量125cc。
+      </section></body></html>""".encode()
+    url = f"{BRANCH.origin}/9103/9127/9129/1766002/post"
+    item = DiscoveredItem(
+        source_record_id="tcy-1766002", official_url=url,
+        discovery_url=f"{BRANCH.origin}/9103/9127/9129/",
+        title="機車整批拍賣公告",
     )
+    artifact = RawArtifact(
+        official_url=url, fetched_at=datetime.now(UTC), mime_type="text/html",
+        filename="post", content=content,
+        checksum_sha256=hashlib.sha256(content).hexdigest(),
+    )
+    adapter = MojEnforcementCmsAdapter(branches=(BRANCH,), request_interval=0)
+    try:
+        parsed = await adapter.parse(item, [artifact])
+    finally:
+        await adapter.close()
 
-    parsed = await adapter.parse(item, [artifact])
-    await adapter.close()
-
-    assert len(parsed.identifiers) == 2
     assert parsed.bulk_lot is True
     assert parsed.vehicle_units == []
     assert parsed.brand is None
     assert parsed.displacement_cc is None
+    assert [identifier.original_value for identifier in parsed.identifiers] == ["AAA-111"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_bulk_notice_does_not_assign_conflicting_vehicle_facts() -> None:
+    content = """<html><head>
+      <meta name='ContentTitle' content='小客車及大型重型機車整批拍賣公告'>
+      </head><body><section class='cp'>
+      小客車及大型重型機車整批，車牌 AAA-111、BBB-222。
+      前車有鑰匙可發動可測試，得辦理移轉過戶；後車無鑰匙無法發動不得測試，僅供報廢。
+      115/10/01 10:00 拍賣，核定底價20,000元，僅合格回收商得投標。
+      </section></body></html>""".encode()
+    url = f"{BRANCH.origin}/9103/9127/9129/1766003/post"
+    item = DiscoveredItem(
+        source_record_id="tcy-1766003", official_url=url,
+        discovery_url=f"{BRANCH.origin}/9103/9127/9129/",
+        title="小客車及大型重型機車整批拍賣公告",
+    )
+    artifact = RawArtifact(
+        official_url=url, fetched_at=datetime.now(UTC), mime_type="text/html",
+        filename="post", content=content,
+        checksum_sha256=hashlib.sha256(content).hexdigest(),
+    )
+    adapter = MojEnforcementCmsAdapter(
+        branches=(BRANCH,), request_interval=0,
+        now=lambda: datetime(2026, 9, 1, tzinfo=TAIPEI),
+    )
+    try:
+        parsed = await adapter.parse(item, [artifact])
+    finally:
+        await adapter.close()
+
+    assert parsed.vehicle_type == "MIXED"
+    assert parsed.bulk_lot is True
+    assert parsed.vehicle_units == []
+    assert parsed.vehicle_class == "UNKNOWN"
+    assert parsed.car_category == "UNKNOWN"
+    assert parsed.has_key == "UNKNOWN"
+    assert parsed.can_start == "UNKNOWN"
+    assert parsed.can_test == "UNKNOWN"
+    assert parsed.registration_status == "UNKNOWN"
+    assert parsed.condition_summary is None
+    assert parsed.completeness_groups["condition"] == 0
+    assert {e.field_name for e in parsed.evidence}.isdisjoint({
+        "vehicle_class", "car_category", "registration_status", "has_key",
+    })
+    assert parsed.ends_at == datetime(2026, 10, 1, 10, 0, tzinfo=TAIPEI)
+    assert parsed.reserve_price == 20_000
+    assert parsed.eligibility == "LICENSED_RECYCLER_ONLY"
+    assert "無法發動" in (parsed.description or "")

@@ -105,12 +105,12 @@ class SupabasePublicPublisher:
             f"/rest/v1/sources?adapter_name=eq.{encoded_adapter}&select=id&limit=2",
         )
         if not isinstance(sources, list) or len(sources) != 1 or not isinstance(sources[0], dict):
-            raise RuntimeError(
-                f"Production source registry does not have exactly one {self.source_adapter} source"
+            raise SourceAccessBlocked(
+                f"Production source registry has no unique {self.source_adapter} source"
             )
         source_id = sources[0].get("id")
         if not source_id:
-            raise RuntimeError(f"Production source registry has no valid id for {self.source_adapter}")
+            raise SourceAccessBlocked(f"Production source registry has no valid id for {self.source_adapter}")
         encoded_source_id = quote(str(source_id), safe="")
         policies = await self._json(
             "GET",

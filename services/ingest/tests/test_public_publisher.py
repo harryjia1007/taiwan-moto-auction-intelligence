@@ -173,7 +173,7 @@ async def test_start_blocks_duplicate_adapter_sources_before_policy_or_run() -> 
 
     publisher._json = fake_json
 
-    with pytest.raises(RuntimeError, match="exactly one pcc source"):
+    with pytest.raises(SourceAccessBlocked, match="no unique pcc source"):
         await publisher.start()
 
     assert len(calls) == 1

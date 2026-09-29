@@ -537,15 +537,10 @@ async def run_publish_public(source: str, limit: int | None) -> None:
     except Exception:
         await publisher.close()
         raise
+    started = False
     try:
         await publisher.start()
-    except Exception:
-        try:
-            await adapter.close()
-        finally:
-            await publisher.close()
-        raise
-    try:
+        started = True
         try:
             items = await adapter.discover()
         except Exception as exc:
@@ -586,7 +581,8 @@ async def run_publish_public(source: str, limit: int | None) -> None:
             await adapter.close()
         finally:
             try:
-                await publisher.finish(result)
+                if started:
+                    await publisher.finish(result)
             finally:
                 await publisher.close()
     typer.echo(result.model_dump_json(indent=2))

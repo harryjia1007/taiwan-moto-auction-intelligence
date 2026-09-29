@@ -720,3 +720,37 @@ async def test_hosted_discovery_failure_logs_safe_branch_diagnostics_and_finishe
     assert "token=private" not in logged
     assert len(completed) == 1
     assert completed[0].failed == 1
+
+
+@pytest.mark.asyncio
+async def test_public_publisher_start_failure_closes_clients_without_finishing_run(monkeypatch) -> None:
+    events: list[str] = []
+
+    class FakeAdapter:
+        async def discover(self) -> None:
+            events.append("discover")
+            raise AssertionError("Discovery must not run after publisher preflight fails")
+
+        async def close(self) -> None:
+            events.append("adapter.close")
+
+    class FakePublisher:
+        async def start(self) -> None:
+            events.append("publisher.start")
+            raise RuntimeError("test-only source policy denied")
+
+        async def finish(self, result: SyncResult) -> None:
+            events.append("publisher.finish")
+
+        async def close(self) -> None:
+            events.append("publisher.close")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "test-only-key")
+    monkeypatch.setattr(cli_module, "adapter_for", lambda source: FakeAdapter())
+    monkeypatch.setattr(cli_module, "SupabasePublicPublisher", lambda *args, **kwargs: FakePublisher())
+
+    with pytest.raises(RuntimeError, match="source policy denied"):
+        await cli_module.run_publish_public("moj_enforcement_cms", None)
+
+    assert events == ["publisher.start", "adapter.close", "publisher.close"]
