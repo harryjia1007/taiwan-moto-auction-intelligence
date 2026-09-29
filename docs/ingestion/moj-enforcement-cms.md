@@ -39,6 +39,8 @@ adapter 程式與 fixture tests 位於 `services/ingest/src/ingest/adapters/moj_
 
 2026-09-29 的無密鑰 GitHub-hosted 短測只讀取臺北分署 `robots.txt`：Linux 強制 IPv4 時 DNS 已解析但 TCP 連線在 5 秒內未建立，強制 IPv6 也無法連線；macOS runner 的 IPv4 亦在 8 秒內無法建立 TCP 連線。這排除了「只要強制 IPv4 或改用 GitHub macOS runner 就可修好」的假設，仍不能推論來源有意封鎖雲端或 GCP 臺灣區必然可用。當天多個本機 preflight 不慎同時執行，結果不一致；後續官方站診斷必須單一、低頻、有限時，不可反覆重試到成功。正式來源尚未同步任何 CMS 案件。
 
+同日另以無密鑰 Windows-hosted runner 單次請求同一官方 `robots.txt`，DNS 後仍在 8 秒內無法建立 TCP 連線（`curl` exit 28、HTTP 000）。診斷執行紀錄為 [GitHub Actions 36553999373](https://github.com/harryjia1007/taiwan-moto-auction-intelligence/actions/runs/36553999373)；暫時性診斷工作流程已移除。不能把正式排程單純改成 Windows 並宣稱恢復。
+
 同日臺灣本機另一次受控 IPv4 單次請求對臺北分署 `robots.txt` 收到 HTTP 302（TCP 建立約 0.147 秒，整次約 1.864 秒）。這只證明當時該機器可連上第一跳，沒有證明導向後的 robots 規則、13 分署發現、正式寫入或排程可行。
 
 同日查核官方替代管道，本次未找到可由 GitHub 排程無驗證碼完整提供 13 分署車輛案件的正式 API／資料集。[中央拍賣系統操作手冊](https://www.tpkonsale.moj.gov.tw/File/GetOperationManual)所示動產查詢使用驗證碼；政府開放資料平臺可核對的[行政執行署拍賣資料集](https://data.gov.tw/dataset/177921)是已拍定不動產且不定期更新；[法務部 RSS](https://www.moj.gov.tw/2807/2816/)不是車輛標的 feed。這些來源都不得被冒充為 CMS 案件同步或用來推定目前沒有車輛。後續可向[行政執行署](https://www.tpk.moj.gov.tw/)或透過[政府資料開放提案](https://data.gov.tw/suggests)申請核准的機器可讀介接。
